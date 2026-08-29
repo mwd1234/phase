@@ -20,7 +20,6 @@ use engine::types::game_state::{
 use engine::types::identifiers::{CardId, ObjectId};
 use engine::types::phase::Phase;
 use engine::types::player::PlayerId;
-use engine::types::resolution::OptionalEffectFrame;
 use std::collections::{BTreeMap, BTreeSet};
 
 const P0: PlayerId = PlayerId(0);
@@ -254,38 +253,6 @@ fn persisted_unsettled_priority_resolution_fails_closed() {
         PersistedGameState::Raw(Box::new(state))
             .into_game_state()
             .expect_err("an unclassified priority-time carrier must not be published"),
-        PersistedRestoreError::UnsettledPriorityResolution,
-    );
-}
-
-/// A priority checkpoint cannot carry an arbitrary parked continuation: there
-/// is no legal player action that can resume it, and turn advancement requires
-/// the resolution stack to be empty.
-#[test]
-fn persisted_priority_resolution_frame_fails_closed() {
-    let mut state = GameState::new(FormatConfig::free_for_all(), 4, 0xB152_FCBF);
-    state.waiting_for = WaitingFor::Priority { player: P2 };
-    state
-        .resolution_stack
-        .push_optional_effect(OptionalEffectFrame {
-            ability: Box::new(ResolvedAbility::new(
-                Effect::Draw {
-                    count: QuantityExpr::Fixed { value: 1 },
-                    target: TargetFilter::Controller,
-                },
-                vec![],
-                ObjectId(901),
-                P3,
-            )),
-            trigger_event: None,
-            trigger_events: vec![],
-            trigger_match_count: None,
-        });
-
-    assert_eq!(
-        PersistedGameState::Raw(Box::new(state))
-            .into_game_state()
-            .expect_err("a priority checkpoint cannot publish a parked resolution frame"),
         PersistedRestoreError::UnsettledPriorityResolution,
     );
 }

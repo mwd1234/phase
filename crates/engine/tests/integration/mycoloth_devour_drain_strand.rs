@@ -99,6 +99,7 @@ use engine::types::game_state::{GameState, PersistedGameState, WaitingFor};
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
 use engine::types::player::PlayerId;
+use engine::types::resolution::ResolutionStateWire;
 use engine::types::zones::Zone;
 
 fn gunzip(gz: &[u8]) -> String {
@@ -110,10 +111,12 @@ fn gunzip(gz: &[u8]) -> String {
     json
 }
 
-/// Load a capture's `["gameState"]` through the REAL production restore
-/// chokepoint `PersistedGameState::into_game_state` — never a bare `GameState`
-/// decode, which would skip `reject_legacy_raw_prompt_authority` and
-/// `decode_persisted_resolution_state`.
+/// Decode a capture's `["gameState"]` through the versioned resolution wire.
+///
+/// These rows exercise the live action-boundary repair, so they deliberately
+/// stop before the production restore finalizer, which now repairs the terminal
+/// strand at load time. The dedicated persisted-restore row below covers that
+/// external boundary.
 ///
 /// One projection is required first, and it is worth stating exactly why rather
 /// than hiding it in a helper. `client/src/services/gameStateExport.ts` writes a
@@ -127,13 +130,8 @@ fn gunzip(gz: &[u8]) -> String {
 /// transformation `ResolutionStateWire::to_value` performs when persisting a
 /// live state: move `resolution_stack` to `resolution_frames` and stamp version
 /// 2. Nothing else is touched — in particular the wedged frame and its
-/// `Dispatching` drain cross verbatim. The decode then runs the FULL v2 reader:
-/// the three allocator recovery passes, `ResolutionStack::validate`,
-/// `project_frames_into_legacy_state` → `canonicalize_legacy_resolution_state`
-/// and the derived-`PartialEq` identity gate, and
-/// `validate_trigger_firing_coherence` — a strictly stronger chokepoint than the
-/// v1 path, not a weaker one.
-fn load_capture(gz: &[u8]) -> GameState {
+/// `Dispatching` drain cross verbatim.
+fn projected_capture_snapshot(gz: &[u8]) -> serde_json::Value {
     let json = gunzip(gz);
     let envelope: serde_json::Value =
         serde_json::from_str(&json).expect("dump envelope parses as JSON");
@@ -155,10 +153,22 @@ fn load_capture(gz: &[u8]) -> GameState {
             serde_json::Value::from(2),
         );
     }
+    snapshot
+}
+
+fn load_capture(gz: &[u8]) -> GameState {
+    let snapshot = projected_capture_snapshot(gz);
+    serde_json::from_value::<ResolutionStateWire>(snapshot)
+        .expect("the projected snapshot deserializes through the versioned resolution decoder")
+        .into_game_state()
+}
+
+fn restore_capture(gz: &[u8]) -> GameState {
+    let snapshot = projected_capture_snapshot(gz);
     serde_json::from_value::<PersistedGameState>(snapshot)
         .expect("the projected snapshot deserializes through the production decoder")
         .into_game_state()
-        .expect("persisted test snapshot satisfies the checked restore contract")
+        .expect("the persisted capture satisfies the checked restore contract")
 }
 
 fn load_turn15() -> GameState {
@@ -171,6 +181,24 @@ fn load_turn20() -> GameState {
     load_capture(include_bytes!(
         "fixtures/mycoloth_devour_wedge_turn20.json.gz"
     ))
+}
+
+#[test]
+fn persisted_wedged_captures_settle_before_publication() {
+    for capture in [
+        include_bytes!("fixtures/mycoloth_devour_wedge_turn15.json.gz").as_slice(),
+        include_bytes!("fixtures/mycoloth_devour_wedge_turn20.json.gz").as_slice(),
+    ] {
+        let state = restore_capture(capture);
+        assert!(
+            state.resolution_stack.is_empty(),
+            "the production restore must not publish the ownerless frame"
+        );
+        assert!(
+            state.resolving_stack_entry.is_none(),
+            "the production restore must settle the terminal stack carrier"
+        );
+    }
 }
 
 /// The per-`PostReplacement`-frame drain statuses of the LOADED runtime state,

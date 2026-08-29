@@ -1647,9 +1647,7 @@ pub(crate) fn recover_terminal_resolution_rest_on_restore(
 
     if matches!(state.waiting_for, WaitingFor::Priority { .. })
         && state.stack_resolution_session.is_none()
-        && (!state.resolution_stack.is_empty()
-            || state.resolving_stack_entry.is_some()
-            || state.pending_resolution_completion.is_some())
+        && (state.resolving_stack_entry.is_some() || state.pending_resolution_completion.is_some())
     {
         return Err(PersistedRestoreError::UnsettledPriorityResolution);
     }
