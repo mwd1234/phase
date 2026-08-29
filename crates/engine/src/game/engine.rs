@@ -1413,20 +1413,9 @@ fn apply_action_boundary_core(
     // while the real state is repaired.
     let pre_recovery_pass_was_authorized = matches!(&action, GameAction::PassPriority)
         && check_actor_authorization(state, authenticated_actor, &action).is_ok();
-    let swept_ownerless_post_replacement_dispatch =
-        has_ownerless_post_replacement_dispatch_at_priority_boundary(state);
-    effects::sweep_ownerless_post_replacement_strand(state);
-    let recovered_devour_rest_boundary =
-        recover_orphaned_devour_completion_at_priority_boundary(state)
-            || recover_orphaned_spell_resolution_at_priority_boundary(state);
-    state.remove_empty_active_post_replacement_frame();
-    let recovered_devour_rest_boundary = recovered_devour_rest_boundary
-        || recover_ownerless_post_replacement_completion_at_priority_boundary(
-            state,
-            swept_ownerless_post_replacement_dispatch,
-        );
+    let recovered_terminal_rest_boundary = sweep_and_recover_priority_boundary_rest(state);
     let recovered_stale_priority_pass =
-        recovered_devour_rest_boundary && matches!(&action, GameAction::PassPriority);
+        recovered_terminal_rest_boundary && matches!(&action, GameAction::PassPriority);
     let boundary_snapshot = state.clone();
     let journal_start = state.resolved_rules_journal.entries().len();
     let is_actor_scoped_preference = action.is_actor_scoped_preference();
@@ -1639,17 +1628,7 @@ pub(crate) fn recover_terminal_resolution_rest_on_restore(
     let mut recovered_terminal_rest = false;
     loop {
         let before = terminal_rest_measure(state);
-        let swept_ownerless_post_replacement_dispatch =
-            has_ownerless_post_replacement_dispatch_at_priority_boundary(state);
-        effects::sweep_ownerless_post_replacement_strand(state);
-        recovered_terminal_rest |= recover_orphaned_devour_completion_at_priority_boundary(state)
-            || recover_orphaned_spell_resolution_at_priority_boundary(state);
-        state.remove_empty_active_post_replacement_frame();
-        recovered_terminal_rest |=
-            recover_ownerless_post_replacement_completion_at_priority_boundary(
-                state,
-                swept_ownerless_post_replacement_dispatch,
-            );
+        recovered_terminal_rest |= sweep_and_recover_priority_boundary_rest(state);
         let after = terminal_rest_measure(state);
 
         if after == 0 {
@@ -1668,7 +1647,9 @@ pub(crate) fn recover_terminal_resolution_rest_on_restore(
 
     if matches!(state.waiting_for, WaitingFor::Priority { .. })
         && state.stack_resolution_session.is_none()
-        && (state.resolving_stack_entry.is_some() || state.pending_resolution_completion.is_some())
+        && (!state.resolution_stack.is_empty()
+            || state.resolving_stack_entry.is_some()
+            || state.pending_resolution_completion.is_some())
     {
         return Err(PersistedRestoreError::UnsettledPriorityResolution);
     }
@@ -1713,6 +1694,26 @@ fn has_ownerless_post_replacement_dispatch_at_priority_boundary(state: &GameStat
                     crate::types::game_state::DrainStatus::Dispatching
                 )
             })
+}
+
+/// Retires the exact, engine-owned terminal rest that can remain visible at a
+/// priority boundary after a post-replacement dispatch has completed.
+///
+/// The live action boundary and persisted restore must preserve this ordering:
+/// sweep the ownerless dispatch, consume an exact terminal carrier, then remove
+/// the exposed empty frame before considering the post-replacement completion.
+fn sweep_and_recover_priority_boundary_rest(state: &mut GameState) -> bool {
+    let swept_ownerless_post_replacement_dispatch =
+        has_ownerless_post_replacement_dispatch_at_priority_boundary(state);
+    effects::sweep_ownerless_post_replacement_strand(state);
+    let recovered_terminal_rest = recover_orphaned_devour_completion_at_priority_boundary(state)
+        || recover_orphaned_spell_resolution_at_priority_boundary(state);
+    state.remove_empty_active_post_replacement_frame();
+    recovered_terminal_rest
+        || recover_ownerless_post_replacement_completion_at_priority_boundary(
+            state,
+            swept_ownerless_post_replacement_dispatch,
+        )
 }
 
 /// An ownerless post-replacement dispatch proves that its continuation already

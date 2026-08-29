@@ -20,6 +20,7 @@ use engine::types::game_state::{
 use engine::types::identifiers::{CardId, ObjectId};
 use engine::types::phase::Phase;
 use engine::types::player::PlayerId;
+use engine::types::resolution::OptionalEffectFrame;
 use std::collections::{BTreeMap, BTreeSet};
 
 const P0: PlayerId = PlayerId(0);
@@ -257,6 +258,38 @@ fn persisted_unsettled_priority_resolution_fails_closed() {
     );
 }
 
+/// A priority checkpoint cannot carry an arbitrary parked continuation: there
+/// is no legal player action that can resume it, and turn advancement requires
+/// the resolution stack to be empty.
+#[test]
+fn persisted_priority_resolution_frame_fails_closed() {
+    let mut state = GameState::new(FormatConfig::free_for_all(), 4, 0xB152_FCBF);
+    state.waiting_for = WaitingFor::Priority { player: P2 };
+    state
+        .resolution_stack
+        .push_optional_effect(OptionalEffectFrame {
+            ability: Box::new(ResolvedAbility::new(
+                Effect::Draw {
+                    count: QuantityExpr::Fixed { value: 1 },
+                    target: TargetFilter::Controller,
+                },
+                vec![],
+                ObjectId(901),
+                P3,
+            )),
+            trigger_event: None,
+            trigger_events: vec![],
+            trigger_match_count: None,
+        });
+
+    assert_eq!(
+        PersistedGameState::Raw(Box::new(state))
+            .into_game_state()
+            .expect_err("a priority checkpoint cannot publish a parked resolution frame"),
+        PersistedRestoreError::UnsettledPriorityResolution,
+    );
+}
+
 /// Deferred triggers captured beside a terminal carrier are an engine-owned
 /// settlement obligation. Restore must construct them before it can expose a
 /// priority window, just as the ordinary post-action pipeline does.
@@ -305,6 +338,13 @@ fn forged_settled_priority_recipient_cannot_bypass_resolution_safe_restore() {
     raw["pending_trigger_construction_priority_recipient"] = serde_json::json!(P2.0);
     let persisted: PersistedGameState =
         serde_json::from_value(raw).expect("forged raw state still decodes as a raw snapshot");
+    assert_eq!(
+        serde_json::to_value(&persisted)
+            .expect("the decoded snapshot reserializes")
+            .get("pending_trigger_construction_priority_recipient"),
+        Some(&serde_json::json!(P2.0)),
+        "reach guard: the forged recipient must survive decode before restore removes it"
+    );
 
     let restored = persisted
         .prepare_for_restore(PersistedRestoreFinalization::DeferUntilRehydrated)
