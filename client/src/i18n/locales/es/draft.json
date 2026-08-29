@@ -40,7 +40,8 @@
       "step4": "Tras el draft, construye un mazo de al menos {{minimumDeckCards}} y juega partidas de torneo"
     },
     "commander": {
-      "step2": "Elige dos cartas de cada sobre y pasa el resto",
+      "step2": "Abre {{packs}}; cada sobre contiene {{cardsPerPack}} — elige dos cartas y pasa el resto",
+      "step2Mixed": "Abre {{packs}} de tamaños distintos, en este orden: {{packSizes, list}} — elige dos cartas y pasa el resto",
       "step4": "Tras el draft, construye un mazo Commander de al menos {{minimumDeckCards}} y juega una partida multijugador"
     }
   },

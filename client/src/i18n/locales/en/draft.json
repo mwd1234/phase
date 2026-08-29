@@ -40,7 +40,8 @@
       "step4": "After drafting, build a deck of at least {{minimumDeckCards}} and play tournament matches"
     },
     "commander": {
-      "step2": "Pick two cards from each pack, then pass the rest",
+      "step2": "Open {{packs}}; each pack contains {{cardsPerPack}} — pick two cards, pass the rest",
+      "step2Mixed": "Open {{packs}} of mixed sizes, in this order: {{packSizes, list}} — pick two cards, pass the rest",
       "step4": "After drafting, build a Commander deck of at least {{minimumDeckCards}} and play one multiplayer game"
     }
   },

@@ -83,7 +83,15 @@ export function DraftIntro({
   // duplicating either sentence into seven locales.
   const commanderSteps: Step[] = [
     { icon: "1", text: t("intro.pod.step1", { count: podSize }) },
-    { icon: "2", text: t("intro.commander.step2") },
+    {
+      icon: "2",
+      text: mixedPackSizes
+        ? t("intro.commander.step2Mixed", {
+            packs,
+            packSizes: packSizeLabels,
+          })
+        : t("intro.commander.step2", { packs, cardsPerPack: cardsPerPackLabel }),
+    },
     { icon: "3", text: packPassing },
     { icon: "4", text: t("intro.commander.step4", { minimumDeckCards }) },
   ];

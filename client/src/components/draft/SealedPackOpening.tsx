@@ -191,7 +191,7 @@ export function SealedPackOpening({ view, onComplete }: SealedPackOpeningProps) 
         <div className="mb-5 text-center">
           <h1 className="menu-display text-3xl text-white">{t("sealedOpening.title")}</h1>
           <p className="mt-2 text-sm text-white/50">
-            {t("sealedOpening.subtitle", { count: packs.length })}
+            {t("sealedOpening.subtitle", { count: view.pack_count })}
           </p>
         </div>
       )}

@@ -128,7 +128,7 @@ describe("SealedPackOpening", () => {
   it("uses singular copy for one engine-provided pack", () => {
     render(
       <SealedPackOpening
-        view={{ ...VIEW, sealed_packs: [[VIEW.pool[0]]] }}
+        view={{ ...VIEW, pack_count: 1, sealed_packs: [[VIEW.pool[0]]] }}
         onComplete={vi.fn()}
       />,
     );

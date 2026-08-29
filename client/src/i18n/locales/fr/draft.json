@@ -40,7 +40,8 @@
       "step4": "Après le draft, construisez un deck d'au moins {{minimumDeckCards}} et jouez des matchs de tournoi"
     },
     "commander": {
-      "step2": "Choisissez deux cartes dans chaque booster, puis passez le reste",
+      "step2": "Ouvrez {{packs}} ; chaque booster contient {{cardsPerPack}} — choisissez deux cartes, puis passez le reste",
+      "step2Mixed": "Ouvrez {{packs}} de tailles différentes, dans cet ordre : {{packSizes, list}} — choisissez deux cartes, puis passez le reste",
       "step4": "Après le draft, construisez un deck Commander d'au moins {{minimumDeckCards}} et jouez une partie multijoueur"
     }
   },

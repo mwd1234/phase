@@ -40,7 +40,8 @@
       "step4": "Po drafcie zbuduj talię z co najmniej {{minimumDeckCards}} i rozegraj mecze turniejowe"
     },
     "commander": {
-      "step2": "Wybierz dwie karty z każdego boostera, a resztę przekaż dalej",
+      "step2": "Otwórz {{packs}}; każdy booster zawiera {{cardsPerPack}} — wybierz dwie karty, a resztę przekaż dalej",
+      "step2Mixed": "Otwórz {{packs}} o różnych rozmiarach, w tej kolejności: {{packSizes, list}} — wybierz dwie karty, a resztę przekaż dalej",
       "step4": "Po drafcie zbuduj talię Commander z co najmniej {{minimumDeckCards}} i rozegraj jedną grę wieloosobową"
     }
   },

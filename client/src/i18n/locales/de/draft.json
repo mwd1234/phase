@@ -40,7 +40,8 @@
       "step4": "Baue nach dem Draften ein Deck mit mindestens {{minimumDeckCards}} und spiele Turnierpartien"
     },
     "commander": {
-      "step2": "Wähle zwei Karten aus jedem Booster und gib den Rest weiter",
+      "step2": "Öffne {{packs}}; jeder Booster enthält {{cardsPerPack}} — wähle zwei Karten, gib den Rest weiter",
+      "step2Mixed": "Öffne {{packs}} unterschiedlicher Größe, in dieser Reihenfolge: {{packSizes, list}} — wähle zwei Karten, gib den Rest weiter",
       "step4": "Baue nach dem Draften ein Commander-Deck mit mindestens {{minimumDeckCards}} und spiele eine Mehrspielerpartie"
     }
   },

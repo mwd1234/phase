@@ -33,9 +33,9 @@ describe("DraftIntro", () => {
       <DraftIntro
         mode="commander"
         podSize={4}
-        packCount={3}
-        cardsPerPack={20}
-        packSizes={[20, 20, 20]}
+        packCount={4}
+        cardsPerPack={18}
+        packSizes={[18, 18, 18, 18]}
         minDeckSize={63}
         onContinue={vi.fn()}
       />,
@@ -44,7 +44,9 @@ describe("DraftIntro", () => {
     // CR 903.13b requires two picks per pack, while CR 903.13f sets a 60-card
     // floor. REVERT-FAILING: 63 proves the copy reads the engine's stricter
     // published minimum instead of duplicating that floor here.
-    expect(screen.getByText("Pick two cards from each pack, then pass the rest")).toBeInTheDocument();
+    expect(
+      screen.getByText("Open 4 packs; each pack contains 18 cards — pick two cards, pass the rest"),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(
         "After drafting, build a Commander deck of at least 63 cards and play one multiplayer game",
@@ -56,6 +58,26 @@ describe("DraftIntro", () => {
     expect(screen.getByText("You're drafting with 4 players in a pod")).toBeInTheDocument();
     expect(
       screen.getByText("The passing direction alternates each round"),
+    ).toBeInTheDocument();
+  });
+
+  it("lists every pack size for a mixed-size Commander draft", () => {
+    render(
+      <DraftIntro
+        mode="commander"
+        podSize={6}
+        packCount={3}
+        cardsPerPack={20}
+        packSizes={[20, 18, 20]}
+        minDeckSize={60}
+        onContinue={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Open 3 packs of mixed sizes, in this order: 20 cards, 18 cards, and 20 cards — pick two cards, pass the rest",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -83,7 +105,11 @@ describe("DraftIntro", () => {
     ).toBeInTheDocument();
     // Non-vacuous: the positive assertions above prove this render mounted, so
     // the absent Commander step is a real absence.
-    expect(screen.queryByText("Pick two cards from each pack, then pass the rest")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Open 4 packs; each pack contains 12 cards — pick two cards, pass the rest",
+      ),
+    ).toBeNull();
   });
 
   it("lists every booster's size when a multi-set draft mixes them", () => {

@@ -211,7 +211,9 @@ describe("DraftPodPage ?kind= mode entry", () => {
     expect(useDraftPodStore.getState().config.kind).toBe("Premier");
     // REVERT-FAILING: BASE renders `<DraftIntro mode="pod" .../>` unconditionally.
     expect(
-      screen.getByText("Pick two cards from each pack, then pass the rest"),
+      screen.getByText(
+        "Open 4 packs; each pack contains 12 cards — pick two cards, pass the rest",
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -271,7 +273,9 @@ describe("DraftPodPage ?kind= mode entry", () => {
     ).toBeInTheDocument();
     // Non-vacuous: the positive above proves the intro mounted.
     expect(
-      screen.queryByText("Pick two cards from each pack, then pass the rest"),
+      screen.queryByText(
+        "Open 4 packs; each pack contains 12 cards — pick two cards, pass the rest",
+      ),
     ).toBeNull();
   });
 
