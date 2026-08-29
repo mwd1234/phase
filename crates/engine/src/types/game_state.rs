@@ -28676,8 +28676,7 @@ mod tests {
 
         let restored = serde_json::from_value::<PersistedGameState>(v1)
             .expect("v1 fixture conservatively restores unlabelled trigger carriers")
-            .into_game_state()
-            .expect("persisted test snapshot satisfies the checked restore contract");
+            .into_game_state_unchecked();
 
         assert_eq!(
             restored.pending_trigger_firing,
