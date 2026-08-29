@@ -1183,7 +1183,8 @@ impl GameSession {
                 // OLD keystream and is meaningless against this one — has to go with the old seed.
                 state.rng_word_pos = 0;
                 Ok(())
-            })?;
+            })
+            .map_err(|error| error.to_string())?;
         // Re-bind rather than trusting any id the blob carries, on the same
         // principle that `restore_session` re-stamps `hosting` and revokes an
         // unentitled debug capability: a persisted blob never drives authority.

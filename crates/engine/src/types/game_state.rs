@@ -11496,6 +11496,10 @@ pub struct PreparedPersistedGameState {
 pub enum PersistedRestoreError {
     #[error("persisted state uses an unsupported format configuration: {0}")]
     UnsupportedFormat(String),
+    #[error("persisted restore finalization policy mismatch: {0}")]
+    FinalizationPolicyMismatch(&'static str),
+    #[error("persisted state runtime rehydration failed: {0}")]
+    RehydrationFailed(String),
     #[error("persisted state has unsettled resolution ownership at priority")]
     UnsettledPriorityResolution,
     #[error("persisted terminal-rest recovery did not make strict progress")]
@@ -11513,9 +11517,11 @@ impl PreparedPersistedGameState {
     pub fn finalize_after_rehydration(
         self,
         rehydrate: impl FnOnce(&mut GameState) -> Result<(), String>,
-    ) -> Result<GameState, String> {
+    ) -> Result<GameState, PersistedRestoreError> {
         if self.finalization != PersistedRestoreFinalization::DeferUntilRehydrated {
-            return Err("persisted restore was prepared for immediate finalization".to_string());
+            return Err(PersistedRestoreError::FinalizationPolicyMismatch(
+                "prepared for immediate finalization",
+            ));
         }
         self.finish_after_rehydration(rehydrate)
     }
@@ -11523,22 +11529,21 @@ impl PreparedPersistedGameState {
     fn finish_after_rehydration(
         self,
         rehydrate: impl FnOnce(&mut GameState) -> Result<(), String>,
-    ) -> Result<GameState, String> {
+    ) -> Result<GameState, PersistedRestoreError> {
         let mut state = self.state;
-        rehydrate(&mut state)?;
-        crate::game::engine::finalize_persisted_restore(&mut state, self.recovered_terminal_rest)
-            .map_err(|error| error.to_string())?;
+        rehydrate(&mut state).map_err(PersistedRestoreError::RehydrationFailed)?;
+        crate::game::engine::finalize_persisted_restore(&mut state, self.recovered_terminal_rest)?;
         Ok(state)
     }
 
     /// Finish a checked restore whose consumer has no runtime-only state to
     /// hydrate. Kept separate from `into_game_state` so every new persistence
     /// boundary chooses its finalization policy explicitly.
-    pub fn finalize_immediately(self) -> Result<GameState, String> {
+    pub fn finalize_immediately(self) -> Result<GameState, PersistedRestoreError> {
         if self.finalization != PersistedRestoreFinalization::Immediate {
-            return Err(
-                "persisted restore requires runtime rehydration before finalization".to_string(),
-            );
+            return Err(PersistedRestoreError::FinalizationPolicyMismatch(
+                "requires runtime rehydration before finalization",
+            ));
         }
         self.finish_after_rehydration(|_| Ok(()))
     }
@@ -11700,11 +11705,7 @@ impl PersistedGameState {
     /// process panic at a library boundary.
     pub fn into_game_state(self) -> Result<GameState, PersistedRestoreError> {
         self.prepare_for_restore(PersistedRestoreFinalization::Immediate)
-            .and_then(|prepared| {
-                prepared
-                    .finalize_immediately()
-                    .map_err(PersistedRestoreError::PrioritySettlementFailed)
-            })
+            .and_then(PreparedPersistedGameState::finalize_immediately)
     }
 }
 

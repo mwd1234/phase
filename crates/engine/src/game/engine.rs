@@ -1559,16 +1559,7 @@ fn apply_action_boundary_core(
 /// live priority window. A prompt-bearing Devour entry or a pending multi-entry
 /// ChangeZone iteration therefore remains untouched.
 fn recover_orphaned_devour_completion_at_priority_boundary(state: &mut GameState) -> bool {
-    let is_orphaned_devour_completion = matches!(state.waiting_for, WaitingFor::Priority { .. })
-        && state.resolving_stack_entry.is_some()
-        && state.resolution_stack.len() == 2
-        && state.active_change_zone_frame().is_some_and(|frame| {
-            frame.pending.is_none() && frame.devour_eligible_snapshot.is_some()
-        })
-        && state
-            .active_post_replacement_drains()
-            .is_some_and(crate::types::game_state::PostReplacementDrainStack::is_empty);
-    if !is_orphaned_devour_completion {
+    if !is_orphaned_devour_completion_at_priority_boundary(state) {
         return false;
     }
 
@@ -1594,24 +1585,7 @@ fn recover_orphaned_devour_completion_at_priority_boundary(state: &mut GameState
 /// Consume only that exact bare carrier rest, then route settlement through the
 /// ordinary completed-carrier authority.
 fn recover_orphaned_spell_resolution_at_priority_boundary(state: &mut GameState) -> bool {
-    let Some(pending) = state.active_spell_resolution() else {
-        return false;
-    };
-    let exact_bare_spell_resolution_rest = matches!(state.waiting_for, WaitingFor::Priority { .. })
-        && state.stack.is_empty()
-        && state.resolution_stack.len() == 1
-        && state.active_ability_continuation().is_none()
-        && state.pending_cast.is_none()
-        && state.pending_resolution_completion.is_none()
-        && matches!(
-            state.resolving_stack_entry.as_ref(),
-            Some(crate::types::game_state::StackEntry {
-                id,
-                kind: StackEntryKind::Spell { .. },
-                ..
-            }) if *id == pending.object_id
-        );
-    if !exact_bare_spell_resolution_rest {
+    if !is_orphaned_spell_resolution_at_priority_boundary(state) {
         return false;
     }
 

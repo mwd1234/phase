@@ -163,7 +163,7 @@ fn prepare_restored_game_state(json_str: &str) -> Result<PreparedRestoredGameSta
     let state = serde_json::from_value::<PersistedGameState>(serialized)
         .map_err(|error| format!("Failed to deserialize GameState: {error}"))?
         .prepare_for_restore(PersistedRestoreFinalization::DeferUntilRehydrated)
-        .map_err(|error| format!("Failed to deserialize GameState: {error}"))?;
+        .map_err(|error| format!("Failed to restore GameState: {error}"))?;
     Ok(PreparedRestoredGameState {
         state,
         debug_permitted_was_serialized,
@@ -176,7 +176,10 @@ fn prepare_restored_game_state(json_str: &str) -> Result<PreparedRestoredGameSta
 #[cfg(test)]
 fn decode_restored_game_state(json_str: &str) -> Result<DecodedRestoredGameState, String> {
     let restored = prepare_restored_game_state(json_str)?;
-    let state = restored.state.finalize_after_rehydration(|_| Ok(()))?;
+    let state = restored
+        .state
+        .finalize_after_rehydration(|_| Ok(()))
+        .map_err(|error| format!("Failed to restore GameState: {error}"))?;
     Ok(DecodedRestoredGameState {
         state,
         debug_permitted_was_serialized: restored.debug_permitted_was_serialized,
@@ -2256,14 +2259,17 @@ fn decode_and_rehydrate_restored_game_state(
 ) -> Result<DecodedRestoredGameState, String> {
     let restored = prepare_restored_game_state(json_str)?;
     let debug_permitted_was_serialized = restored.debug_permitted_was_serialized;
-    let state = restored.state.finalize_after_rehydration(|state| {
-        rehydrate_restored_state_from_card_db(state)?;
-        // Combat declaration snapshots are display data derived from the rehydrated
-        // live board. Rebuild them before this external state becomes interactive.
-        engine::game::combat::refresh_combat_declaration_waiting_for(state);
-        restore_runtime(state);
-        Ok(())
-    })?;
+    let state = restored
+        .state
+        .finalize_after_rehydration(|state| {
+            rehydrate_restored_state_from_card_db(state)?;
+            // Combat declaration snapshots are display data derived from the rehydrated
+            // live board. Rebuild them before this external state becomes interactive.
+            engine::game::combat::refresh_combat_declaration_waiting_for(state);
+            restore_runtime(state);
+            Ok(())
+        })
+        .map_err(|error| format!("Failed to restore GameState: {error}"))?;
     let restored = DecodedRestoredGameState {
         state,
         debug_permitted_was_serialized,
