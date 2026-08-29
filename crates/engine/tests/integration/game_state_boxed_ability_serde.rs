@@ -261,7 +261,13 @@ fn boxing_introduces_no_wrapper_level_in_the_wire_shape() {
 /// round trip, so this test covers the persisted seam on its own terms.
 fn state_with_resolving_stack_entry() -> GameState {
     let mut state = GameState::new_two_player(42);
-    state.waiting_for = WaitingFor::Priority { player: P0 };
+    state.waiting_for = WaitingFor::OptionalEffectChoice {
+        player: P0,
+        source_id: SOURCE,
+        description: None,
+        may_trigger_key: None,
+        same_card_may_trigger_choice_available: false,
+    };
     state.resolving_stack_entry = Some(StackEntry {
         id: ObjectId(704),
         source_id: SOURCE,

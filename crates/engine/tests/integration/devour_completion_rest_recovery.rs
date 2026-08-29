@@ -280,8 +280,8 @@ fn persisted_terminal_rest_settles_deferred_triggers_before_priority() {
 
 /// A raw snapshot can forge the serialized recipient that normally carries a
 /// settled-priority construction batch. It must not unlock that exceptional
-/// drain policy above a passive spell; the restore boundary instead refuses to
-/// publish the still-queued trigger.
+/// drain policy above a passive spell; the restore boundary drops the recipient
+/// and leaves ordinary trigger construction to its normal action boundary.
 #[test]
 fn forged_settled_priority_recipient_cannot_bypass_resolution_safe_restore() {
     let mut state = GameState::new(FormatConfig::free_for_all(), 4, 0xB152_FCBF);
@@ -306,16 +306,21 @@ fn forged_settled_priority_recipient_cannot_bypass_resolution_safe_restore() {
     let persisted: PersistedGameState =
         serde_json::from_value(raw).expect("forged raw state still decodes as a raw snapshot");
 
-    let error = persisted
+    let restored = persisted
         .prepare_for_restore(PersistedRestoreFinalization::DeferUntilRehydrated)
         .expect("the passive spell is a valid unresolved stack state")
         .finalize_after_rehydration(|_| Ok(()))
-        .expect_err("a forged recipient must not drain queued triggers above a passive spell");
+        .expect("the unchanged stack remains a valid restore state");
 
+    let restored_wire = serde_json::to_value(&restored).expect("the restored state serializes");
     assert!(
-        error.contains("deferred triggers"),
-        "the restore must fail through the resolution-safe deferred-trigger gate: {error}"
+        restored_wire
+            .get("pending_trigger_construction_priority_recipient")
+            .is_none(),
+        "a serialized recipient alone must not authorize settled-priority construction"
     );
+    assert_eq!(restored.deferred_triggers.len(), 1);
+    assert_eq!(restored.stack.len(), 1);
 }
 
 #[test]

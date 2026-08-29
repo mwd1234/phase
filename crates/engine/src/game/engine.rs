@@ -1413,11 +1413,18 @@ fn apply_action_boundary_core(
     // while the real state is repaired.
     let pre_recovery_pass_was_authorized = matches!(&action, GameAction::PassPriority)
         && check_actor_authorization(state, authenticated_actor, &action).is_ok();
+    let swept_ownerless_post_replacement_dispatch =
+        has_ownerless_post_replacement_dispatch_at_priority_boundary(state);
     effects::sweep_ownerless_post_replacement_strand(state);
     let recovered_devour_rest_boundary =
         recover_orphaned_devour_completion_at_priority_boundary(state)
             || recover_orphaned_spell_resolution_at_priority_boundary(state);
     state.remove_empty_active_post_replacement_frame();
+    let recovered_devour_rest_boundary = recovered_devour_rest_boundary
+        || recover_ownerless_post_replacement_completion_at_priority_boundary(
+            state,
+            swept_ownerless_post_replacement_dispatch,
+        );
     let recovered_stale_priority_pass =
         recovered_devour_rest_boundary && matches!(&action, GameAction::PassPriority);
     let boundary_snapshot = state.clone();
@@ -1646,14 +1653,29 @@ pub(crate) fn recover_terminal_resolution_rest_on_restore(
         return Ok(false);
     }
 
+    // A construction recipient may be serialized after the direct
+    // triggered-mana root has completed. At Priority, that recipient alone is
+    // not proof of the exceptional settled-priority path, so it cannot survive
+    // the persistence boundary as scheduling authority.
+    if state.pending_triggered_mana_resume.is_none() {
+        state.pending_trigger_construction_priority_recipient = None;
+    }
+
     let mut remaining_steps = terminal_rest_measure(state).saturating_add(1);
     let mut recovered_terminal_rest = false;
     loop {
         let before = terminal_rest_measure(state);
+        let swept_ownerless_post_replacement_dispatch =
+            has_ownerless_post_replacement_dispatch_at_priority_boundary(state);
         effects::sweep_ownerless_post_replacement_strand(state);
         recovered_terminal_rest |= recover_orphaned_devour_completion_at_priority_boundary(state)
             || recover_orphaned_spell_resolution_at_priority_boundary(state);
         state.remove_empty_active_post_replacement_frame();
+        recovered_terminal_rest |=
+            recover_ownerless_post_replacement_completion_at_priority_boundary(
+                state,
+                swept_ownerless_post_replacement_dispatch,
+            );
         let after = terminal_rest_measure(state);
 
         if after == 0 {
@@ -1672,9 +1694,7 @@ pub(crate) fn recover_terminal_resolution_rest_on_restore(
 
     if matches!(state.waiting_for, WaitingFor::Priority { .. })
         && state.stack_resolution_session.is_none()
-        && (!state.resolution_stack.is_empty()
-            || state.resolving_stack_entry.is_some()
-            || state.pending_resolution_completion.is_some())
+        && (state.resolving_stack_entry.is_some() || state.pending_resolution_completion.is_some())
     {
         return Err(PersistedRestoreError::UnsettledPriorityResolution);
     }
@@ -1705,6 +1725,53 @@ fn terminal_rest_measure(state: &GameState) -> usize {
         + empty_post_replacement * 2
         + usize::from(is_orphaned_devour_completion_at_priority_boundary(state))
         + usize::from(is_orphaned_spell_resolution_at_priority_boundary(state))
+}
+
+fn has_ownerless_post_replacement_dispatch_at_priority_boundary(state: &GameState) -> bool {
+    matches!(state.waiting_for, WaitingFor::Priority { .. })
+        && !crate::game::engine_replacement::post_replacement_dispatch_is_live()
+        && state
+            .active_post_replacement_drains()
+            .and_then(crate::types::game_state::PostReplacementDrainStack::resident)
+            .is_some_and(|drain| {
+                matches!(
+                    drain.status,
+                    crate::types::game_state::DrainStatus::Dispatching
+                )
+            })
+}
+
+/// An ownerless post-replacement dispatch proves that its continuation already
+/// returned, but pre-v0.65 persistence could retain the resolving carrier after
+/// the now-empty drain frame is removed. Settle only that carrier completion; a
+/// Ready or Paused drain, any remaining frame, or a pending completion is live
+/// work and remains untouched.
+fn recover_ownerless_post_replacement_completion_at_priority_boundary(
+    state: &mut GameState,
+    swept_ownerless_post_replacement_dispatch: bool,
+) -> bool {
+    if !swept_ownerless_post_replacement_dispatch
+        || !matches!(state.waiting_for, WaitingFor::Priority { .. })
+        || !state.resolution_stack.is_empty()
+        || state.pending_cast.is_some()
+        || state.pending_resolution_completion.is_some()
+        || state.resolving_stack_entry.is_none()
+    {
+        return false;
+    }
+
+    let mut recovered = state.clone();
+    settle_resolving_stack_entry_after_continuation_resume(&mut recovered);
+    if recovered.resolving_stack_entry.is_some() {
+        return false;
+    }
+
+    priority::reset_priority(&mut recovered);
+    recovered.waiting_for = WaitingFor::Priority {
+        player: recovered.active_player,
+    };
+    *state = recovered;
+    true
 }
 
 fn is_orphaned_devour_completion_at_priority_boundary(state: &GameState) -> bool {
