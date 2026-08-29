@@ -308,7 +308,8 @@ fn persisted_round_trip_preserves_the_boxed_resolving_stack_entry() {
     // just the derived `GameState` one.
     let restored = serde_json::from_str::<PersistedGameState>(&json)
         .expect("and deserializes back through the persisted codec")
-        .into_game_state();
+        .into_game_state()
+        .expect("persisted test snapshot satisfies the checked restore contract");
 
     let restored_entry = restored
         .resolving_stack_entry
@@ -387,7 +388,8 @@ fn persisted_restore_migrates_legacy_jeskas_will_mana_target_role() {
 
     let restored = serde_json::from_value::<PersistedGameState>(persisted)
         .expect("legacy Jeska's Will snapshot restores through the persisted codec")
-        .into_game_state();
+        .into_game_state()
+        .expect("persisted test snapshot satisfies the checked restore contract");
     let reserialized = serde_json::to_value(PersistedGameState::capture(restored))
         .expect("the migrated state reserializes");
     assert_eq!(

@@ -158,6 +158,7 @@ fn load_capture(gz: &[u8]) -> GameState {
     serde_json::from_value::<PersistedGameState>(snapshot)
         .expect("the projected snapshot deserializes through the production decoder")
         .into_game_state()
+        .expect("persisted test snapshot satisfies the checked restore contract")
 }
 
 fn load_turn15() -> GameState {

@@ -15,10 +15,10 @@ use crate::types::game_state::{
     ActionResult, AssistState, AutoMayChoice, AutoPassMode, AutoPassRequest, CastOfferKind,
     CastingVariant, ConvokeMode, CostResume, GameState, LandPlayRecord, LoopDetectionMode,
     ManaAbilityResume, MayTriggerAutoChoiceKey, PayCostKind, PendingCostMoveResume,
-    PendingCounterPostAction, PendingEffectResolved, ResolveAllConsentParticipant,
-    ResolveAllConsentRun, ResolveAllPrioritySnapshot, RetargetScope, StackEntry, StackEntryKind,
-    StackResolutionAutoPassOverlay, StackResolutionBudget, StackResolutionEntryFence,
-    StackResolutionPolicy, StackResolutionSession, WaitingFor,
+    PendingCounterPostAction, PendingEffectResolved, PersistedRestoreError,
+    ResolveAllConsentParticipant, ResolveAllConsentRun, ResolveAllPrioritySnapshot, RetargetScope,
+    StackEntry, StackEntryKind, StackResolutionAutoPassOverlay, StackResolutionBudget,
+    StackResolutionEntryFence, StackResolutionPolicy, StackResolutionSession, WaitingFor,
 };
 use crate::types::identifiers::{CardId, DelayedTriggerOrigin, ObjectId, ObjectIncarnationRef};
 use crate::types::match_config::MatchType;
@@ -1627,6 +1627,185 @@ fn recover_orphaned_spell_resolution_at_priority_boundary(state: &mut GameState)
     };
     *state = recovered;
     true
+}
+
+/// Prepare a decoded persisted state before runtime-only card data is restored.
+///
+/// This is deliberately a bounded, monotonic repair loop rather than a call to
+/// the ordinary action reducer: decoding must not invent a player action or a
+/// Resolve All continuation. Each iteration first retires ownerless
+/// post-replacement dispatches, then consumes one exact terminal carrier, then
+/// removes the newly exposed empty frame. If that sequence cannot strictly
+/// lower the terminal-rest measure, the caller receives a fail-closed restore
+/// error instead of publishing a priority state that `start_next_turn` will
+/// later reject.
+pub(crate) fn recover_terminal_resolution_rest_on_restore(
+    state: &mut GameState,
+) -> Result<bool, PersistedRestoreError> {
+    if !matches!(state.waiting_for, WaitingFor::Priority { .. }) {
+        return Ok(false);
+    }
+
+    let mut remaining_steps = terminal_rest_measure(state).saturating_add(1);
+    let mut recovered_terminal_rest = false;
+    loop {
+        let before = terminal_rest_measure(state);
+        effects::sweep_ownerless_post_replacement_strand(state);
+        recovered_terminal_rest |= recover_orphaned_devour_completion_at_priority_boundary(state)
+            || recover_orphaned_spell_resolution_at_priority_boundary(state);
+        state.remove_empty_active_post_replacement_frame();
+        let after = terminal_rest_measure(state);
+
+        if after == 0 {
+            break;
+        }
+        if after >= before {
+            return Err(PersistedRestoreError::TerminalRestRecoveryExhausted);
+        }
+        remaining_steps = remaining_steps
+            .checked_sub(1)
+            .ok_or(PersistedRestoreError::TerminalRestRecoveryExhausted)?;
+        if remaining_steps == 0 {
+            return Err(PersistedRestoreError::TerminalRestRecoveryExhausted);
+        }
+    }
+
+    if matches!(state.waiting_for, WaitingFor::Priority { .. })
+        && state.stack_resolution_session.is_none()
+        && (!state.resolution_stack.is_empty()
+            || state.resolving_stack_entry.is_some()
+            || state.pending_resolution_completion.is_some())
+    {
+        return Err(PersistedRestoreError::UnsettledPriorityResolution);
+    }
+    Ok(recovered_terminal_rest)
+}
+
+fn terminal_rest_measure(state: &GameState) -> usize {
+    // Removing an outer ownerless/empty post-replacement frame can expose the
+    // terminal carrier below it. Weight the outer obstruction above that
+    // carrier so every permitted exposure is still strictly decreasing.
+    let (ownerless, empty_post_replacement) =
+        state
+            .active_post_replacement_drains()
+            .map_or((0, 0), |drains| {
+                (
+                    usize::from(drains.resident().is_some_and(|drain| {
+                        matches!(
+                            drain.status,
+                            crate::types::game_state::DrainStatus::Dispatching
+                        )
+                    })),
+                    usize::from(
+                        crate::types::game_state::PostReplacementDrainStack::is_empty(drains),
+                    ),
+                )
+            });
+    ownerless * 4
+        + empty_post_replacement * 2
+        + usize::from(is_orphaned_devour_completion_at_priority_boundary(state))
+        + usize::from(is_orphaned_spell_resolution_at_priority_boundary(state))
+}
+
+fn is_orphaned_devour_completion_at_priority_boundary(state: &GameState) -> bool {
+    matches!(state.waiting_for, WaitingFor::Priority { .. })
+        && state.resolving_stack_entry.is_some()
+        && state.resolution_stack.len() == 2
+        && state.active_change_zone_frame().is_some_and(|frame| {
+            frame.pending.is_none() && frame.devour_eligible_snapshot.is_some()
+        })
+        && state
+            .active_post_replacement_drains()
+            .is_some_and(crate::types::game_state::PostReplacementDrainStack::is_empty)
+}
+
+fn is_orphaned_spell_resolution_at_priority_boundary(state: &GameState) -> bool {
+    let Some(pending) = state.active_spell_resolution() else {
+        return false;
+    };
+    matches!(state.waiting_for, WaitingFor::Priority { .. })
+        && state.stack.is_empty()
+        && state.resolution_stack.len() == 1
+        && state.active_ability_continuation().is_none()
+        && state.pending_cast.is_none()
+        && state.pending_resolution_completion.is_none()
+        && matches!(
+            state.resolving_stack_entry.as_ref(),
+            Some(crate::types::game_state::StackEntry {
+                id,
+                kind: StackEntryKind::Spell { .. },
+                ..
+            }) if *id == pending.object_id
+        )
+}
+
+/// Finalize a checked persisted restore after its runtime-only data is present.
+///
+/// `finalize_rules_state` remains interior to this boundary so no partially
+/// rehydrated state escapes. The terminal-rest preparation has already either
+/// settled exact engine-owned residue or failed closed, so this makes no pass,
+/// stack-resolution, or Resolve All decision on the caller's behalf.
+pub(crate) fn finalize_persisted_restore(
+    state: &mut GameState,
+    recovered_terminal_rest: bool,
+) -> Result<(), PersistedRestoreError> {
+    finalize_rules_state(state);
+    let recovered_terminal_rest =
+        recovered_terminal_rest || recover_terminal_resolution_rest_on_restore(state)?;
+    if recovered_terminal_rest {
+        settle_deferred_triggers_after_persisted_restore(state)?;
+    }
+    // The settlement pipeline returns its authoritative wait rather than
+    // publishing it itself. Synchronize that wait before the one display
+    // finalization below.
+    finalize_rules_state(state);
+    finalize_display_state(state);
+    Ok(())
+}
+
+/// Settle a deferred trigger batch that survived a persisted terminal-rest
+/// repair before publishing a priority window.
+///
+/// Restore never treats a serialized construction recipient as proof that the
+/// settled-priority pipeline is safe. That recipient is scheduling state, not
+/// a live typed root: a raw snapshot can forge it without the completed
+/// triggered-mana root that validated the exceptional drain policy. Drop it
+/// and use the ordinary resolution-safe pipeline instead. A batch that remains
+/// queued after that policy is not publishable.
+fn settle_deferred_triggers_after_persisted_restore(
+    state: &mut GameState,
+) -> Result<(), PersistedRestoreError> {
+    let WaitingFor::Priority { player } = &state.waiting_for else {
+        return Ok(());
+    };
+    let player = *player;
+    // `pending_triggered_mana_resume` is absent once the direct root has
+    // completed, so the saved recipient alone cannot establish the live root
+    // provenance required by `SettledPriority`. Do not manufacture that
+    // provenance from serialized scheduling data.
+    state.pending_trigger_construction_priority_recipient = None;
+    if state.deferred_triggers.is_empty() {
+        return Ok(());
+    }
+
+    let mut events = Vec::new();
+    let waiting_for = engine_priority::run_post_action_pipeline_from(
+        state,
+        &mut events,
+        0,
+        &WaitingFor::Priority { player },
+        false,
+        false,
+    )
+    .map_err(|error| PersistedRestoreError::PrioritySettlementFailed(error.to_string()))?;
+    state.waiting_for = waiting_for;
+
+    if matches!(state.waiting_for, WaitingFor::Priority { .. })
+        && !state.deferred_triggers.is_empty()
+    {
+        return Err(PersistedRestoreError::DeferredTriggerSettlement);
+    }
+    Ok(())
 }
 
 fn finish_action_boundary(
@@ -19262,10 +19441,11 @@ mod stage2_injector_tests {
         // first, so this helper exercises the chokepoint the server's `from_persisted`
         // and WASM's `decode_restored_game_state` actually funnel through — including
         // the CR 732.2a load-seam bound invariant.
-        // `.expect(..)`, not `?`: `into_game_state` returns `GameState`, not `Result`.
+        // The test unwraps the fallible persistence boundary after asserting this fixture decodes.
         serde_json::from_value::<PersistedGameState>(envelope["gameState"].clone())
             .expect("gameState deserializes through the production decoder")
             .into_game_state()
+            .expect("persisted test snapshot satisfies the checked restore contract")
     }
 
     const EMBLEM: ObjectId = ObjectId(541);
@@ -21078,10 +21258,11 @@ mod kilo_interruptibility_tests {
         // Decoding AS `PersistedGameState` (rather than decoding a bare `GameState` and
         // wrapping it) additionally routes the dump through
         // `reject_legacy_raw_prompt_authority` + `decode_persisted_resolution_state`.
-        // `.expect(..)`, not `?`: `into_game_state` returns `GameState`, not `Result`.
+        // The test unwraps the fallible persistence boundary after asserting this fixture decodes.
         serde_json::from_value::<PersistedGameState>(envelope["gameState"].clone())
             .expect("gameState deserializes through the production decoder")
             .into_game_state()
+            .expect("persisted test snapshot satisfies the checked restore contract")
     }
 
     fn beat_actor(state: &GameState) -> PlayerId {
