@@ -23,7 +23,7 @@ import {
 import type { AIDifficulty } from "../constants/ai";
 import { DEFAULT_AI_DIFFICULTY } from "../constants/ai";
 import type { DeckArchetype } from "../services/engineRuntime";
-import { detectInitialLanguage, SUPPORTED_LNGS, type SupportedLng } from "../i18n/resources";
+import { detectInitialLanguage, normalizeSupportedLng, type SupportedLng } from "../i18n/resources";
 
 /** Literal sentinel for "any deck" in AI deck selection. Mirrors `DeckChoice::Random`
  *  naming so the preference value is self-describing without a nullable field. */
@@ -586,7 +586,8 @@ export const usePreferencesStore = create<PreferencesState & PreferencesActions>
       ...buildDefaultPreferences(),
 
       // Store owns the language; i18n/index.ts subscribes and mirrors it into i18next.
-      setLanguage: (lng) => set({ language: lng }),
+      setLanguage: (lng) =>
+        set((state) => ({ language: normalizeSupportedLng(lng, state.language) })),
       setCardSize: (size) => set({ cardSize: size }),
       setHudLayout: (layout) => set({ hudLayout: layout }),
       setFollowActiveOpponent: (enabled) => set({ followActiveOpponent: enabled }),
@@ -989,13 +990,9 @@ export const usePreferencesStore = create<PreferencesState & PreferencesActions>
         }
 
         if (version < 9) {
-          const lng = (migrated as { language?: unknown }).language;
           migrated = {
             ...migrated,
-            language:
-              typeof lng === "string" && (SUPPORTED_LNGS as readonly string[]).includes(lng)
-                ? lng
-                : detectInitialLanguage(),
+            language: normalizeSupportedLng(migrated.language, detectInitialLanguage()),
           };
         }
 
@@ -1077,7 +1074,23 @@ export const usePreferencesStore = create<PreferencesState & PreferencesActions>
           };
         }
 
-        return migrated;
+        return {
+          ...migrated,
+          language: normalizeSupportedLng(migrated.language, detectInitialLanguage()),
+        };
+      },
+      // Persisted state is external input. Migration only runs when the schema
+      // version changes, so this boundary also protects current-version blobs
+      // restored from browser storage or a backup.
+      merge: (persisted, current) => {
+        const saved = persisted && typeof persisted === "object"
+          ? persisted as Partial<PreferencesState>
+          : {};
+        return {
+          ...current,
+          ...saved,
+          language: normalizeSupportedLng(saved.language, current.language),
+        };
       },
     },
   ),

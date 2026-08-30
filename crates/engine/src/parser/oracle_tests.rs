@@ -18283,6 +18283,91 @@ fn drag_to_the_underworld_devotion_cost_reduction_and_destroy_parse() {
     );
 }
 
+/// CR 601.2f + CR 301.5 + CR 611.3a: Glamdring, Foe-hammer (verbatim Oracle
+/// text) — "Instant and sorcery spells you cast cost {X} less to cast, where
+/// X is equipped creature's power." + "Equip {2}". Unlike the self-spell
+/// devotion reduction above (`SelfRef`, applies to the card printing the
+/// ability), this is a board-wide reduction the Equipment grants to OTHER
+/// spells its controller casts (`affected` = cards you control), with X bound
+/// to a live `Aggregate` over the EQUIPPED creature's power rather than a
+/// snapshot. Zero `Unimplemented` effects end to end.
+#[test]
+fn glamdring_foe_hammer_equipped_power_cost_reduction_and_equip_parse() {
+    let r = parse(
+        "Instant and sorcery spells you cast cost {X} less to cast, where X is equipped creature's power.\n\
+         Equip {2}",
+        "Glamdring, Foe-hammer",
+        &[],
+        &["Artifact"],
+        &["Equipment"],
+    );
+
+    assert!(
+        !parsed_has_unimplemented(&r),
+        "Glamdring must parse with zero Unimplemented effects: {r:#?}"
+    );
+
+    assert_eq!(r.statics.len(), 1, "expected exactly one static ability");
+    let StaticMode::ModifyCost {
+        mode: CostModifyMode::Reduce,
+        amount: ManaCost::Cost { generic: 1, .. },
+        spell_filter: Some(TargetFilter::Or { ref filters }),
+        dynamic_count: Some(QuantityRef::PropertyAggregate(ref aggregate)),
+    } = &r.statics[0].mode
+    else {
+        panic!(
+            "expected ModifyCost{{Reduce, amount: generic 1, spell_filter: Or[Instant,Sorcery], \
+             dynamic_count: PropertyAggregate(Sum, Power, Objects(Typed(Creature, EquippedBy)))}}, got {:?}",
+            r.statics[0].mode
+        );
+    };
+    assert_eq!(aggregate.function(), AggregateFunction::Sum);
+    assert_eq!(aggregate.property(), ObjectProperty::Power);
+    let crate::types::ability::CardTypeSetSource::Objects {
+        filter: TargetFilter::Typed(ref tf),
+    } = aggregate.source()
+    else {
+        panic!(
+            "expected aggregate source Objects(Typed(Creature, EquippedBy)), got {:?}",
+            aggregate.source()
+        );
+    };
+    assert_eq!(filters.len(), 2, "expected Instant + Sorcery");
+    assert!(
+        filters.iter().any(|filter| {
+            matches!(filter, TargetFilter::Typed(tf)
+                if tf.type_filters == vec![TypeFilter::Instant])
+        }) && filters.iter().any(|filter| {
+            matches!(filter, TargetFilter::Typed(tf)
+                if tf.type_filters == vec![TypeFilter::Sorcery])
+        }),
+        "expected spell_filter = Or[Instant, Sorcery], got {filters:?}"
+    );
+    assert_eq!(tf.type_filters, vec![TypeFilter::Creature]);
+    assert_eq!(tf.properties, vec![FilterProp::EquippedBy]);
+    // Board-wide — NOT the self-spell SelfRef scope (contrast Drag to the
+    // Underworld above).
+    assert!(
+        matches!(
+            &r.statics[0].affected,
+            Some(TargetFilter::Typed(tf)) if tf.controller == Some(ControllerRef::You)
+        ),
+        "expected affected = cards you control, got {:?}",
+        r.statics[0].affected
+    );
+
+    // Equip {2} activated ability is untouched by the cost-reduction work.
+    let equip = r
+        .abilities
+        .iter()
+        .find(|a| a.ability_tag == Some(crate::types::ability::AbilityTag::Equip));
+    assert!(
+        equip.is_some(),
+        "expected an Equip-tagged activated ability, got {:?}",
+        r.abilities
+    );
+}
+
 #[test]
 fn read_the_runes_draw_discard_unless_sacrifice_permanent_parse() {
     let r = parse(

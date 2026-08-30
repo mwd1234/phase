@@ -1011,8 +1011,14 @@ pub fn parse_quantity_ref(input: &str) -> OracleResult<'_, QuantityRef> {
             parse_cards_in_zone_ref,
         )),
         // CR 208.3 / CR 306.5c: source-scoped power / toughness / loyalty
-        // self-possessives ("~'s power", "~'s loyalty").
-        parse_self_characteristic_ref,
+        // self-possessives ("~'s power", "~'s loyalty"), nested with the
+        // Equipment/Aura attached-creature possessives ("equipped creature's
+        // power", "enchanted creature's power") to stay within nom's
+        // top-level `alt` arity (nom 8.0 max: 21 items).
+        alt((
+            parse_self_characteristic_ref,
+            parse_attached_creature_pt_ref,
+        )),
         parse_damage_dealt_this_turn_ref,
         parse_life_lost_ref,
         parse_life_gained_ref,
@@ -3504,6 +3510,53 @@ fn parse_self_characteristic_ref(input: &str) -> OracleResult<'_, QuantityRef> {
         ),
     ))
     .parse(rest)
+}
+
+/// CR 301.5f + CR 303.4m + CR 208.1: Parse "equipped creature's power/toughness"
+/// and "enchanted creature's power/toughness" — a dynamic quantity bound to
+/// whatever creature the ability's Equipment/Aura source is CURRENTLY attached
+/// to (Glamdring, Foe-hammer's "cost {X} less ..., where X is equipped
+/// creature's power"). CR 301.5f / CR 303.4m: "equipped creature" / "enchanted
+/// creature" refers to whatever creature the permanent is attached to.
+///
+/// Modeled as `PropertyAggregate` over a `CardTypeSetSource::Objects` population
+/// filtered by `FilterProp::EquippedBy`/`EnchantedBy`, not a dedicated
+/// `ObjectScope` — CR 301.5f / CR 303.4m
+/// define "equipped"/"enchanted creature" only in terms of an attachment, so
+/// there is no such creature when the source is unattached, and `Sum` over
+/// that empty population is 0 by definition, exactly the "no reduction"
+/// outcome an unattached Equipment/Aura requires. A single-object
+/// `ObjectScope` would have no object to resolve against in that case.
+/// `EquippedBy`/`EnchantedBy` are source-relative (`game/filter.rs`), so this
+/// reads the board fresh every time the enclosing quantity is resolved — never
+/// a parse-time snapshot — per CR 611.3a (a static ability's continuous effect
+/// isn't locked in).
+fn parse_attached_creature_pt_ref(input: &str) -> OracleResult<'_, QuantityRef> {
+    let (rest, attachment_prop) = alt((
+        value(FilterProp::EquippedBy, tag("equipped creature's ")),
+        value(FilterProp::EnchantedBy, tag("enchanted creature's ")),
+    ))
+    .parse(input)?;
+    let (rest, property) = alt((
+        value(ObjectProperty::Power, tag("power")),
+        value(ObjectProperty::Toughness, tag("toughness")),
+    ))
+    .parse(rest)?;
+    Ok((
+        rest,
+        QuantityRef::PropertyAggregate(
+            PropertyAggregate::new(
+                AggregateFunction::Sum,
+                property,
+                CardTypeSetSource::Objects {
+                    filter: TargetFilter::Typed(
+                        TypedFilter::creature().properties(vec![attachment_prop]),
+                    ),
+                },
+            )
+            .expect("object populations support every aggregate property"),
+        ),
+    ))
 }
 
 /// Parse damage-history references such as Chandra's Incinerator's
@@ -6649,6 +6702,77 @@ mod tests {
             assert!(
                 parse_quantity_ref_complete(near_miss).is_err(),
                 "near-miss or semantic tail must remain unsupported: {near_miss}"
+            );
+        }
+    }
+
+    /// CR 301.5f + CR 303.4m + CR 208.1: the attached-creature characteristic
+    /// grammar is a 2x2 product — attachment kind (Equipment "equipped
+    /// creature's" / Aura "enchanted creature's") x characteristic (power /
+    /// toughness). `parse_attached_creature_pt_ref` accepts all four, so all
+    /// four are pinned here: a swapped attachment `FilterProp` or a
+    /// power/toughness branch regression must fail a row rather than hide
+    /// behind the single Glamdring card-level assertion.
+    #[test]
+    fn attached_creature_characteristic_grammar_covers_equipment_and_aura_pt() {
+        for (phrase, expected_property, expected_prop) in [
+            (
+                "equipped creature's power",
+                ObjectProperty::Power,
+                FilterProp::EquippedBy,
+            ),
+            (
+                "equipped creature's toughness",
+                ObjectProperty::Toughness,
+                FilterProp::EquippedBy,
+            ),
+            (
+                "enchanted creature's power",
+                ObjectProperty::Power,
+                FilterProp::EnchantedBy,
+            ),
+            (
+                "enchanted creature's toughness",
+                ObjectProperty::Toughness,
+                FilterProp::EnchantedBy,
+            ),
+        ] {
+            let (rest, qty) =
+                parse_quantity_ref(phrase).unwrap_or_else(|e| panic!("{phrase} must parse: {e:?}"));
+            assert_eq!(rest, "", "{phrase} must be fully consumed");
+            let QuantityRef::PropertyAggregate(aggregate) = qty else {
+                panic!("{phrase}: expected PropertyAggregate, got {qty:?}");
+            };
+            // CR 301.5f / CR 303.4m: an unattached source has no such creature,
+            // so the population is empty and `Sum` is 0 — the "no reduction"
+            // outcome. Pin the aggregate function alongside the 2x2 axes.
+            assert_eq!(aggregate.function(), AggregateFunction::Sum, "{phrase}");
+            assert_eq!(aggregate.property(), expected_property, "{phrase}");
+            let CardTypeSetSource::Objects {
+                filter: TargetFilter::Typed(tf),
+            } = aggregate.source()
+            else {
+                panic!(
+                    "{phrase}: expected Objects(Typed(..)) population, got {:?}",
+                    aggregate.source()
+                );
+            };
+            assert_eq!(tf.type_filters, vec![TypeFilter::Creature], "{phrase}");
+            assert_eq!(tf.properties, vec![expected_prop], "{phrase}");
+        }
+
+        // Near misses: the grammar is attachment-possessive-anchored, so a
+        // non-creature attachment noun or a characteristic outside the
+        // power/toughness pair must not silently reach this combinator.
+        for near_miss in [
+            "equipped creature's loyalty",
+            "equipped permanent's power",
+            "enchanted player's power",
+            "equipped creature power",
+        ] {
+            assert!(
+                parse_quantity_ref_complete(near_miss).is_err(),
+                "near miss must remain unsupported: {near_miss}"
             );
         }
     }
