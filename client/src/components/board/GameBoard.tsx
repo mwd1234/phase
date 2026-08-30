@@ -33,7 +33,11 @@ interface GameBoardProps {
   playerHud?: React.ReactNode;
   showOpponentCards?: boolean;
   onKickPlayer?: (playerId: PlayerId) => void;
-  onViewZone?: (zone: "graveyard" | "exile" | "library", playerId: PlayerId) => void;
+  onViewZone?: (
+    zone: "graveyard" | "exile" | "library",
+    playerId: PlayerId,
+    launcher: HTMLButtonElement,
+  ) => void;
 }
 
 export const GameBoard = memo(function GameBoard({

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
@@ -58,6 +65,7 @@ interface PreferencesModalProps {
   onClose: () => void;
   initialTab?: SettingsTabId;
   highlight?: SettingsHighlight;
+  returnFocusRef?: RefObject<HTMLElement | SVGElement | null>;
 }
 
 /** Locale options for the language selector. Labels are autonyms (each language's
@@ -142,10 +150,12 @@ export function PreferencesModal({
   onClose,
   initialTab = "gameplay",
   highlight,
+  returnFocusRef,
 }: PreferencesModalProps) {
   const { t } = useTranslation("settings");
   const setFlexEditMode = useUiStore((s) => s.setFlexEditMode);
   const boardBackgroundRef = useRef<HTMLDivElement | null>(null);
+  const visualTabRef = useRef<HTMLButtonElement>(null);
   const [highlightFlash, setHighlightFlash] = useState(highlight === "board-background");
 
   useEffect(() => {
@@ -319,6 +329,7 @@ export function PreferencesModal({
       title={t("modal.title")}
       subtitle={t("modal.subtitle")}
       onClose={onClose}
+      returnFocusRef={returnFocusRef}
       maxWidthClassName="max-w-5xl"
       bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden pl-4 pt-4 pr-1.5 pb-8 sm:pl-6 sm:pt-6 sm:pr-2 sm:pb-10"
     >
@@ -328,6 +339,7 @@ export function PreferencesModal({
                 {SETTINGS_TABS.map((tab) => (
                   <button
                     key={tab.id}
+                    ref={tab.id === "visual" ? visualTabRef : undefined}
                     onClick={() => setActiveTab(tab.id)}
                     className={`min-h-11 shrink-0 snap-start rounded-[16px] border px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.16em] transition-colors md:w-full md:px-4 md:text-xs md:tracking-[0.18em] ${
                       activeTab === tab.id
@@ -632,6 +644,7 @@ export function PreferencesModal({
                       <ClearArtOverridesButton
                         count={artOverrideCount}
                         onClear={clearAllArtOverrides}
+                        successFocusRef={visualTabRef}
                       />
                     )}
                   </SettingGroup>
@@ -824,21 +837,26 @@ export function PreferencesModal({
 function ClearArtOverridesButton({
   count,
   onClear,
+  successFocusRef,
 }: {
   count: number;
   onClear: () => void;
+  successFocusRef: RefObject<HTMLButtonElement | null>;
 }) {
   const { t } = useTranslation("settings");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const onConfirm = useCallback(() => {
+    successFocusRef.current?.focus();
     onClear();
     setConfirmOpen(false);
-  }, [onClear]);
+  }, [onClear, successFocusRef]);
 
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setConfirmOpen(true)}
         className="mt-2 rounded-[14px] border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/10"
@@ -853,6 +871,7 @@ function ClearArtOverridesButton({
         onConfirm={onConfirm}
         onCancel={() => setConfirmOpen(false)}
         tone="danger"
+        returnFocusRef={triggerRef}
       />
     </>
   );
@@ -869,6 +888,7 @@ function ResetAllFooter({
 }) {
   const { t } = useTranslation("settings");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const onConfirm = useCallback(() => {
     resetAllPreferences();
@@ -878,6 +898,7 @@ function ResetAllFooter({
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setConfirmOpen(true)}
         className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 transition-colors hover:text-rose-300"
@@ -892,6 +913,7 @@ function ResetAllFooter({
         onConfirm={onConfirm}
         onCancel={() => setConfirmOpen(false)}
         tone="danger"
+        returnFocusRef={triggerRef}
       />
     </>
   );
@@ -1088,6 +1110,7 @@ function DataSection() {
   const telemetryEnabled = usePreferencesStore((s) => s.telemetryEnabled);
   const setTelemetryEnabled = usePreferencesStore((s) => s.setTelemetryEnabled);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const importButtonRef = useRef<HTMLButtonElement>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
@@ -1154,6 +1177,7 @@ function DataSection() {
           {t("data.exportBackup")}
         </button>
         <button
+          ref={importButtonRef}
           onClick={() => {
             fileInputRef.current?.click();
           }}
@@ -1185,6 +1209,7 @@ function DataSection() {
         onCancel={dismissImportDialog}
         tone="danger"
         secondaryTone="primary"
+        returnFocusRef={importButtonRef}
       />
       {status && <p className="text-xs text-emerald-400">{status}</p>}
       {error && <p className="text-xs text-rose-400">{error}</p>}

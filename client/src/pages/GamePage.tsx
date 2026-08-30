@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type RefObject,
   useCallback,
   useEffect,
   useMemo,
@@ -58,6 +59,7 @@ import { GameBoard } from "../components/board/GameBoard.tsx";
 import { CardImage } from "../components/card/CardImage.tsx";
 import { GameCardPreview } from "../components/card/GameCardPreview.tsx";
 import { CardReportDialog } from "../components/card/CardReportDialog.tsx";
+import { isFocusTargetAvailable } from "../components/ui/focusTarget.ts";
 import { ActionButton } from "../components/board/ActionButton.tsx";
 import { FullControlToggle } from "../components/controls/FullControlToggle.tsx";
 import { CombatPhaseIndicator } from "../components/controls/PhaseStopBar.tsx";
@@ -942,6 +944,38 @@ function GamePageContent({
   const [preferencesOpen, setPreferencesOpen] = useState<
     null | { tab?: SettingsTabId; highlight?: SettingsHighlight }
   >(null);
+  const gameMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const preferencesReturnFocusRef = useRef<HTMLElement | SVGElement | null>(null);
+  const zoneViewerReturnFocusRef = useRef<HTMLElement | SVGElement | null>(null);
+  const resolvedZoneViewerReturnFocusRef = useMemo<
+    RefObject<HTMLElement | SVGElement | null>
+  >(
+    () => ({
+      get current() {
+        const exactLauncher = zoneViewerReturnFocusRef.current;
+        // A manually opened pile is the most precise return target, but the
+        // final card can leave that pile while the viewer is open. Resolve at
+        // restoration time so the persistent game-menu trigger remains a
+        // connected fallback instead of allowing focus to fall to <body>.
+        return isFocusTargetAvailable(exactLauncher)
+          ? exactLauncher
+          : gameMenuTriggerRef.current;
+      },
+    }),
+    [],
+  );
+  const openPreferences = useCallback(
+    (request: { tab?: SettingsTabId; highlight?: SettingsHighlight } = {}) => {
+      // Toast and context-menu launchers unmount as settings opens. Hand focus
+      // to the persistent game-menu button first, and make that same durable
+      // element the modal's explicit restoration target.
+      const returnTarget = gameMenuTriggerRef.current;
+      preferencesReturnFocusRef.current = returnTarget;
+      returnTarget?.focus();
+      setPreferencesOpen(request);
+    },
+    [],
+  );
   const [boardContextMenu, setBoardContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   const playerId = usePlayerId();
@@ -1208,6 +1242,7 @@ function GamePageContent({
     // zone control glow prompts the user to pick.
     if (groups.size === 1 && firstHit) {
       dismissedCastableZoneViewerKeyRef.current = null;
+      zoneViewerReturnFocusRef.current = gameMenuTriggerRef.current;
       setViewingZone(firstHit);
       return;
     }
@@ -1220,6 +1255,7 @@ function GamePageContent({
     if (castableTarget) {
       const autoOpenKey = castableZoneViewerAutoOpenKey(castableTarget);
       if (dismissedCastableZoneViewerKeyRef.current !== autoOpenKey) {
+        zoneViewerReturnFocusRef.current = gameMenuTriggerRef.current;
         setViewingZone({
           zone: castableTarget.zone,
           playerId: castableTarget.playerId,
@@ -1238,6 +1274,13 @@ function GamePageContent({
     }
     setViewingZone(null);
   }, [viewingZone]);
+
+  const prepareZoneViewerActionClose = useCallback(() => {
+    // A cast/play action can remove the final card only after its asynchronous
+    // engine dispatch resolves. Choose the durable launcher before the viewer
+    // closes so focus never lands on a pile that disappears moments later.
+    zoneViewerReturnFocusRef.current = gameMenuTriggerRef.current;
+  }, []);
 
   const handleDeclareCompanion = useCallback(
     (choice: CompanionRevealChoice | null) => {
@@ -1333,7 +1376,13 @@ function GamePageContent({
     ? { width: "38px", height: "53px" }
     : { width: "clamp(45px, 4.5vw, 70px)", height: "clamp(63px, 6.3vw, 98px)" };
   const handleViewZone = useCallback(
-    (zone: "graveyard" | "exile" | "library", zonePlayerId: number) => {
+    (
+      zone: "graveyard" | "exile" | "library",
+      zonePlayerId: number,
+      launcher?: HTMLButtonElement,
+    ) => {
+      zoneViewerReturnFocusRef.current =
+        launcher ?? gameMenuTriggerRef.current;
       setViewingZone({ zone, playerId: zonePlayerId });
     },
     [],
@@ -1503,17 +1552,23 @@ function GamePageContent({
                     <ExilePile
                       playerId={activeOpponentId}
                       size={pileSize}
-                      onClick={() => handleViewZone("exile", activeOpponentId)}
+                      onClick={(launcher) =>
+                        handleViewZone("exile", activeOpponentId, launcher)
+                      }
                     />
                     <LibraryPile
                       playerId={activeOpponentId}
                       size={pileSize}
-                      onView={() => handleViewZone("library", activeOpponentId)}
+                      onView={(launcher) =>
+                        handleViewZone("library", activeOpponentId, launcher)
+                      }
                     />
                     <GraveyardPile
                       playerId={activeOpponentId}
                       size={pileSize}
-                      onClick={() => handleViewZone("graveyard", activeOpponentId)}
+                      onClick={(launcher) =>
+                        handleViewZone("graveyard", activeOpponentId, launcher)
+                      }
                     />
                   </>
                 ) : null}
@@ -1570,17 +1625,23 @@ function GamePageContent({
               <ExilePile
                 playerId={perspectivePlayerId}
                 size={pileSize}
-                onClick={() => handleViewZone("exile", perspectivePlayerId)}
+                onClick={(launcher) =>
+                  handleViewZone("exile", perspectivePlayerId, launcher)
+                }
               />
               <GraveyardPile
                 playerId={perspectivePlayerId}
                 size={pileSize}
-                onClick={() => handleViewZone("graveyard", perspectivePlayerId)}
+                onClick={(launcher) =>
+                  handleViewZone("graveyard", perspectivePlayerId, launcher)
+                }
               />
               <LibraryPile
                 playerId={perspectivePlayerId}
                 size={pileSize}
-                onView={() => handleViewZone("library", perspectivePlayerId)}
+                onView={(launcher) =>
+                  handleViewZone("library", perspectivePlayerId, launcher)
+                }
               />
             </div>
           </DraggableWidget>
@@ -1678,7 +1739,8 @@ function GamePageContent({
         onDismissMultiplayerSplitLayoutNudge={
           showMultiplayerSplitLayoutNudge ? handleDismissMultiplayerSplitLayoutNudge : undefined
         }
-        onSettingsClick={() => setPreferencesOpen({})}
+        onSettingsClick={() => openPreferences()}
+        menuTriggerRef={gameMenuTriggerRef}
         onHelpClick={() => setHelpSheetOpen(true)}
         onConcede={onShowConcedeDialog}
         // Takeback is a TRANSPORT capability, not a mode policy: only
@@ -1711,7 +1773,7 @@ function GamePageContent({
         onReportCardClick={() => useUiStore.getState().openCardReportDialog()}
       />
       <HelpSheet />
-      <CardReportDialog />
+      <CardReportDialog returnFocusRef={gameMenuTriggerRef} />
 
       {/* The page's toast surface, not an online-only one: solo games raise
           toasts too (the native-engine fallback notice). Only online games get
@@ -1719,7 +1781,7 @@ function GamePageContent({
           to re-dial and would just restart itself. */}
       <ConnectionToast
         onRetry={isOnlineMode ? () => window.location.reload() : undefined}
-        onSettings={() => setPreferencesOpen({})}
+        onSettings={() => openPreferences()}
       />
 
 
@@ -1858,6 +1920,7 @@ function GamePageContent({
           onClose={() => setPreferencesOpen(null)}
           initialTab={preferencesOpen.tab}
           highlight={preferencesOpen.highlight}
+          returnFocusRef={preferencesReturnFocusRef}
         />
       )}
 
@@ -1867,7 +1930,7 @@ function GamePageContent({
           y={boardContextMenu.y}
           onClose={() => setBoardContextMenu(null)}
           onChangeBackground={() =>
-            setPreferencesOpen({ tab: "gameplay", highlight: "board-background" })
+            openPreferences({ tab: "gameplay", highlight: "board-background" })
           }
           onCustomizeLayout={() => useUiStore.getState().setFlexEditMode(true)}
           onToggleGameLog={() => useUiStore.getState().toggleLogPanel()}
@@ -1878,8 +1941,8 @@ function GamePageContent({
         />
       )}
 
-      <DebugCardContextMenu />
-      <DebugLibraryViewer />
+      <DebugCardContextMenu surface="game" />
+      <DebugLibraryViewer returnFocusRef={gameMenuTriggerRef} />
 
       {/* Animation overlay (above board, below modals) */}
       <AnimationOverlay containerRef={containerRef} />
@@ -2061,6 +2124,8 @@ function GamePageContent({
           zone={viewingZone.zone}
           playerId={viewingZone.playerId}
           onClose={handleZoneViewerClose}
+          onPrepareActionClose={prepareZoneViewerActionClose}
+          returnFocusRef={resolvedZoneViewerReturnFocusRef}
         />
       )}
 
@@ -2197,6 +2262,7 @@ function GamePageContent({
                 : undefined
             }
             onCancel={onHideConcedeDialog}
+            returnFocusRef={gameMenuTriggerRef}
           />
           <TakebackRequestDialog
             isOpen={pendingTakeback !== null}

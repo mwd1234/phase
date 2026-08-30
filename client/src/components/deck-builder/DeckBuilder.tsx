@@ -119,6 +119,22 @@ export function DeckBuilder({
   // (rail visible) — only the former gets dialog semantics + a focus trap.
   const isNarrow = useIsMobile(820);
   const filterPanelRef = useRef<HTMLDivElement>(null);
+  const deckPanelRef = useRef<HTMLElement>(null);
+  const listPickerReturnFocusRef = useRef<HTMLElement | SVGElement | null>(null);
+  const openListArtPicker = useCallback(
+    (cardName: string, launcher: HTMLButtonElement) => {
+      listPickerReturnFocusRef.current = launcher;
+      launcher.focus();
+      handleOpenArtPicker(cardName);
+    },
+    [handleOpenArtPicker],
+  );
+  const chooseListArtFromContextMenu = useCallback(() => {
+    // The context-menu item unmounts as the picker opens, so its labelled deck
+    // panel is the nearest durable return destination.
+    listPickerReturnFocusRef.current = deckPanelRef.current;
+    handleListChooseArt();
+  }, [handleListChooseArt]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersAsDialog = filtersOpen && isNarrow;
   useEffect(() => {
@@ -315,9 +331,11 @@ export function DeckBuilder({
             controlling tab is display:none, but aria-labelledby still resolves
             its name from the hidden node, so the region stays labelled). */}
         <section
+          ref={deckPanelRef}
           id={panelId("deck")}
           role="tabpanel"
           aria-labelledby={tabId("deck")}
+          tabIndex={-1}
           className={`${mainVisible} min-h-0 min-w-0 flex-1 flex-col`}
         >
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/8 px-3 py-2">
@@ -438,7 +456,7 @@ export function DeckBuilder({
                         onChooseArt={handleListContextMenu}
                         onSetAsCommander={isCommander ? handleSetCommander : undefined}
                         isCommanderEligible={isCommander ? isCommanderEligible : undefined}
-                        onOpenArtPicker={handleOpenArtPicker}
+                        onOpenArtPicker={openListArtPicker}
                         commanders={commanders}
                         onRemoveCommander={handleRemoveCommander}
                       />
@@ -456,6 +474,7 @@ export function DeckBuilder({
                       onRemoveCommander={handleRemoveCommander}
                       onCardHover={onCardHover}
                       format={format}
+                      pickerReturnFocusRef={deckPanelRef}
                     />
                   )}
                 </div>
@@ -516,7 +535,7 @@ export function DeckBuilder({
           cardName={listContextMenu.cardName}
           hasOverride={!!artOverrides[resolveOracleIdSync(listContextMenu.cardName) ?? ""]}
           hasAlternates={hasAlternatePrintingsSync(resolveOracleIdSync(listContextMenu.cardName) ?? "")}
-          onChooseArt={handleListChooseArt}
+          onChooseArt={chooseListArtFromContextMenu}
           onClearOverride={handleListClearOverride}
           onClose={() => setListContextMenu(null)}
         />
@@ -528,6 +547,7 @@ export function DeckBuilder({
           oracleId={listPickerCard.oracleId}
           onCardHover={onCardHover}
           onClose={() => setListPickerCard(null)}
+          returnFocusRef={listPickerReturnFocusRef}
         />
       )}
 

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useCardImage } from "../../hooks/useCardImage";
@@ -33,6 +33,8 @@ interface DeckStackProps {
   format?: GameFormat;
   /** Whether the main deck is sub-grouped by card type or by color. */
   groupMode: GroupMode;
+  /** Stable deck surface restored after the nested printing picker closes. */
+  pickerReturnFocusRef?: RefObject<HTMLElement | SVGElement | null>;
 }
 
 type DeckStackSection = "commander" | "main" | "sideboard";
@@ -449,6 +451,7 @@ export function DeckStack({
   onCardHover,
   format,
   groupMode,
+  pickerReturnFocusRef,
 }: DeckStackProps) {
   const { t } = useTranslation("deck-builder");
   const isMaybeboard = isMaybeboardPolicy(useSideboardPolicy(format));
@@ -600,6 +603,7 @@ export function DeckStack({
           oracleId={pickerCard.oracleId}
           onCardHover={onCardHover}
           onClose={() => setPickerCard(null)}
+          returnFocusRef={pickerReturnFocusRef}
         />
       )}
     </div>

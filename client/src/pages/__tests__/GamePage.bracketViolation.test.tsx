@@ -10,7 +10,14 @@
  * are mocked so the suite exercises only the modal render logic and the
  * "Return to setup" navigation.
  */
-import { cleanup, render, screen, act } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router";
@@ -23,6 +30,7 @@ import type { P2PAdapterEvent } from "../../adapter/p2p-adapter";
 import { P2PHostAdapter } from "../../adapter/p2p-adapter";
 import { WebSocketAdapter } from "../../adapter/ws-adapter";
 import { usePreferencesStore } from "../../stores/preferencesStore";
+import { useUiStore } from "../../stores/uiStore";
 import { gameObjectFactory } from "../../test/factories/gameObjectFactory";
 import {
   buildCommanderFormatConfig,
@@ -229,12 +237,14 @@ vi.mock("../../components/hud/HUD", () => ({
 }));
 
 vi.mock("../../components/board/GameBoard", () => ({
-  GameBoard: ({ effectiveMultiplayerBoardLayout }: { effectiveMultiplayerBoardLayout: string }) => (
-    <div
-      data-layout={effectiveMultiplayerBoardLayout}
-      data-testid="game-board-layout"
-    />
-  ),
+  GameBoard: (props: Record<string, unknown>) => {
+    return (
+      <div
+        data-layout={String(props.effectiveMultiplayerBoardLayout)}
+        data-testid="game-board-layout"
+      />
+    );
+  },
 }));
 
 vi.mock("../../components/modal/EngineLostModal", () => ({
@@ -270,7 +280,14 @@ vi.mock("../../adapter/draft-adapter", () => ({
 vi.mock("../../components/chrome/GameMenu", () => ({
   GameMenu: (props: Record<string, unknown>) => {
     capturedGameMenuProps = props;
-    return null;
+    return (
+      <button
+        ref={props.menuTriggerRef as React.Ref<HTMLButtonElement> | undefined}
+        type="button"
+      >
+        Game menu
+      </button>
+    );
   },
 }));
 
@@ -289,19 +306,52 @@ vi.mock("../../hooks/useCardDataMeta", () => ({
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function renderGamePage(
+function gamePageTree(
   initialEntry: string | { pathname: string; search: string; state: unknown } =
     "/game/test-game-123?mode=ai",
 ) {
-  return render(
+  return (
     <MemoryRouter initialEntries={[initialEntry as never]}>
       <Routes>
         <Route path="/game/:id" element={<GamePage />} />
         <Route path="/setup" element={<div data-testid="setup-page">Setup</div>} />
         <Route path="/" element={<div>Home</div>} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+}
+
+function renderGamePage(
+  initialEntry: string | { pathname: string; search: string; state: unknown } =
+    "/game/test-game-123?mode=ai",
+) {
+  return render(gamePageTree(initialEntry));
+}
+
+async function closePreferencesAndExpectGameMenuFocus(): Promise<void> {
+  const dialog = await screen.findByRole("dialog", { name: "Settings" });
+  await closeDialogAndExpectGameMenuFocus(dialog);
+}
+
+async function closeDialogAndExpectGameMenuFocus(
+  dialog: HTMLElement,
+): Promise<void> {
+  await closeDialogAndExpectFocus(
+    dialog,
+    screen.getByRole("button", { name: "Game menu" }),
+  );
+}
+
+async function closeDialogAndExpectFocus(
+  dialog: HTMLElement,
+  returnTarget: HTMLElement,
+): Promise<void> {
+  await waitFor(() => expect(dialog).toHaveFocus());
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  await waitFor(() =>
+    expect(dialog).not.toBeInTheDocument(),
+  );
+  expect(returnTarget).toHaveFocus();
 }
 
 // ── Test suite ────────────────────────────────────────────────────────────────
@@ -715,6 +765,161 @@ describe("GamePage — toast surface", () => {
     // so Retry's absence is the omitted prop rather than an unmounted toast.
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("returns Settings from a transient toast to the persistent game menu", async () => {
+    seedToast();
+    renderGamePage("/game/test-game-123?mode=ai");
+    const gameMenu = screen.getByRole("button", { name: "Game menu" });
+    const toastSettings = screen.getByRole("button", { name: "Settings" });
+
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.click(toastSettings);
+
+    await closePreferencesAndExpectGameMenuFocus();
+    expect(gameMenu).toHaveFocus();
+  });
+});
+
+describe("GamePage — board settings focus handoff", () => {
+  it("returns Change Background from its transient menu to the game menu", async () => {
+    renderGamePage();
+    fireEvent.contextMenu(screen.getByTestId("game-board-layout"), {
+      clientX: 40,
+      clientY: 60,
+    });
+
+    fireEvent.click(screen.getByRole("menuitem", { name: /Change background/ }));
+
+    await closePreferencesAndExpectGameMenuFocus();
+  });
+});
+
+describe("GamePage — shared modal return targets", () => {
+  it("returns a manually opened zone viewer to its persistent pile", async () => {
+    const card = gameObjectFactory
+      .withId(71)
+      .named("Graveyard Card")
+      .ownedBy(0)
+      .inGraveyard()
+      .build();
+    storeOverrides.gameState = gameStateFactory
+      .withPlayers({ id: 0, graveyard: [card.id] }, 1)
+      .withObjects(card)
+      .build();
+    renderGamePage();
+    const pile = document.querySelector<HTMLButtonElement>(
+      '[data-graveyard-pile="0"]',
+    );
+    expect(pile).not.toBeNull();
+    screen.getByRole("button", { name: "Game menu" }).focus();
+    fireEvent.click(pile!);
+
+    await closeDialogAndExpectFocus(
+      await screen.findByRole("dialog", { name: /Graveyard/ }),
+      pile!,
+    );
+  });
+
+  it("falls back to the game menu when the final card leaves an open zone", async () => {
+    const card = gameObjectFactory
+      .withId(72)
+      .named("Last Graveyard Card")
+      .ownedBy(0)
+      .inGraveyard()
+      .build();
+    storeOverrides.gameState = gameStateFactory
+      .withPlayers({ id: 0, graveyard: [card.id] }, 1)
+      .withObjects(card)
+      .build();
+    const view = renderGamePage();
+    const pile = document.querySelector<HTMLButtonElement>(
+      '[data-graveyard-pile="0"]',
+    );
+    expect(pile).not.toBeNull();
+    fireEvent.click(pile!);
+    const dialog = await screen.findByRole("dialog", { name: /Graveyard/ });
+    await waitFor(() => expect(dialog).toHaveFocus());
+
+    storeOverrides.gameState = gameStateFactory.withPlayers(0, 1).build();
+    view.rerender(gamePageTree());
+    expect(pile).not.toBeInTheDocument();
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Game menu" })).toHaveFocus();
+  });
+
+  it("falls back when a visible library launcher remains mounted but disables", async () => {
+    const visibleTop = gameObjectFactory
+      .withId(73)
+      .named("Visible Library Top")
+      .ownedBy(0)
+      .params({
+        zone: "Library",
+        display_visible_to_viewer: true,
+        entered_battlefield_turn: null,
+      })
+      .build();
+    storeOverrides.gameState = gameStateFactory
+      .withPlayers({ id: 0, library: [visibleTop.id] }, 1)
+      .withObjects(visibleTop)
+      .build();
+    const view = renderGamePage();
+    const pile = document.querySelector<HTMLButtonElement>(
+      '[data-library-pile="0"] > button',
+    );
+    expect(pile).toBeEnabled();
+    fireEvent.click(pile!);
+    const dialog = await screen.findByRole("dialog", { name: /Library/ });
+    await waitFor(() => expect(dialog).toHaveFocus());
+
+    const hiddenTop = { ...visibleTop, display_visible_to_viewer: false };
+    storeOverrides.gameState = gameStateFactory
+      .withPlayers({ id: 0, library: [hiddenTop.id] }, 1)
+      .withObjects(hiddenTop)
+      .build();
+    view.rerender(gamePageTree());
+    expect(pile).toBeInTheDocument();
+    expect(pile).toBeDisabled();
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Game menu" })).toHaveFocus();
+  });
+
+  it("returns a board-context card report to the persistent game menu", async () => {
+    storeOverrides.gameState = gameStateFactory.build();
+    renderGamePage();
+    fireEvent.contextMenu(screen.getByTestId("game-board-layout"), {
+      clientX: 40,
+      clientY: 60,
+    });
+
+    fireEvent.click(screen.getByRole("menuitem", { name: /Report a card/ }));
+
+    await closeDialogAndExpectGameMenuFocus(await screen.findByRole("dialog"));
+  });
+
+  it("closes the higher debug panel before opening its library viewer", async () => {
+    renderGamePage();
+    act(() => useUiStore.getState().openSandboxTools());
+    expect(useUiStore.getState().debugPanelOpen).toBe(true);
+    expect(useUiStore.getState().debugPanelTab).toBe("actions");
+    expect(await screen.findByText("Debug Panel")).toBeInTheDocument();
+    expect(await screen.findByText("Debug Actions")).toBeInTheDocument();
+    const accordionToggle = await screen.findByRole("button", {
+      name: /Browse Library/,
+    });
+    fireEvent.click(accordionToggle);
+    const browseButtons = screen.getAllByRole("button", {
+      name: /Browse Library/,
+    });
+    fireEvent.click(browseButtons[browseButtons.length - 1]);
+
+    expect(screen.queryByText("Debug Panel")).not.toBeInTheDocument();
+
+    await closeDialogAndExpectGameMenuFocus(await screen.findByRole("dialog"));
   });
 });
 

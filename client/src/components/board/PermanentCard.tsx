@@ -645,7 +645,12 @@ export const PermanentCard = memo(function PermanentCard({
     if (longPressFired.current) { longPressFired.current = false; return; }
     if (useUiStore.getState().debugInteractionMode) {
       e.stopPropagation();
-      useUiStore.getState().openDebugContextMenu({ objectId, x: e.clientX, y: e.clientY });
+      useUiStore.getState().openDebugContextMenu({
+        objectId,
+        x: e.clientX,
+        y: e.clientY,
+        surface: "game",
+      });
       return;
     }
     if (onPrimaryClickOverride) {

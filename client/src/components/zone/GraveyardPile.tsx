@@ -14,7 +14,7 @@ const EMPTY: readonly number[] = [];
 
 interface GraveyardPileProps {
   playerId: number;
-  onClick: () => void;
+  onClick: (launcher: HTMLButtonElement) => void;
   size?: { width: string; height: string };
 }
 
@@ -107,7 +107,7 @@ export function GraveyardPile({ playerId, onClick, size }: GraveyardPileProps) {
 
   return (
     <button
-      onClick={onClick}
+      onClick={(event) => onClick(event.currentTarget)}
       className={`group relative cursor-pointer ${hasTargetableCards || hasDelveableCards ? "ring-2 ring-amber-400/60 rounded-lg shadow-[0_0_12px_3px_rgba(201,176,55,0.8)]" : ""}`}
       title={t("zone.graveyardTitle", { count })}
       data-graveyard-pile={playerId}

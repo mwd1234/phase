@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 
@@ -84,6 +84,7 @@ export function GameSetupPage() {
   // Format picker modal -- opened by the hero chip below the title. Mobile
   // gets a full-screen sheet via <ModalPanelShell>; desktop centers it.
   const [formatPickerOpen, setFormatPickerOpen] = useState(false);
+  const formatPickerTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Format & config state
   const [selectedFormat, setSelectedFormat] = useState<GameFormat | null>(null);
@@ -283,6 +284,7 @@ export function GameSetupPage() {
           return (
             <div className="flex justify-center">
               <button
+                ref={formatPickerTriggerRef}
                 type="button"
                 onClick={() => setFormatPickerOpen(true)}
                 aria-haspopup="dialog"
@@ -664,6 +666,7 @@ export function GameSetupPage() {
         title={t("gameSetup.formatPicker.title")}
         subtitle={t("gameSetup.formatPicker.subtitle")}
         onClose={() => setFormatPickerOpen(false)}
+        returnFocusRef={formatPickerTriggerRef}
         maxWidthClassName="max-w-3xl"
         bodyClassName="overflow-y-auto px-4 pt-4 lg:px-6 lg:pt-6"
       >

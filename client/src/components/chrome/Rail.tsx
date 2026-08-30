@@ -12,7 +12,7 @@ import { SparkleIcon } from "./SparkleIcon";
  * SocialBar take over.
  */
 interface RailProps {
-  onSettings: () => void;
+  onSettings: (launcher: HTMLButtonElement) => void;
   onWhatsNew: () => void;
   /** When true, an unread dot rides the "What's New" button. */
   hasUnread: boolean;
@@ -91,7 +91,7 @@ export function Rail({ onSettings, onWhatsNew, hasUnread }: RailProps) {
         </button>
 
         <button
-          onClick={onSettings}
+          onClick={(event) => onSettings(event.currentTarget)}
           className="flex w-full flex-col items-center gap-1 rounded-[9px] border border-transparent px-1 py-2 text-fg-meta transition-colors hover:border-white/[0.08] hover:bg-white/[0.035] hover:text-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35 [@media(max-height:540px)]:py-1"
         >
           <img src="/icons/sections/settings.png" alt="" aria-hidden="true" draggable={false} className="h-6 w-6 opacity-50" />

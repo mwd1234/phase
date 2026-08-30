@@ -439,7 +439,12 @@ export function PlayerHand() {
     (objectId: number, e?: React.MouseEvent) => {
       if (useUiStore.getState().debugInteractionMode && e) {
         e.stopPropagation();
-        useUiStore.getState().openDebugContextMenu({ objectId, x: e.clientX, y: e.clientY });
+        useUiStore.getState().openDebugContextMenu({
+          objectId,
+          x: e.clientX,
+          y: e.clientY,
+          surface: "game",
+        });
         return;
       }
       if (isMobile) {

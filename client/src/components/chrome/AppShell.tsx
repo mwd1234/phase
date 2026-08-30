@@ -1,4 +1,4 @@
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router";
 import { useTranslation } from "react-i18next";
 
@@ -29,6 +29,7 @@ export function AppShell() {
   // The shell owns settings-modal state so the rail's Settings button and the
   // (controlled) ChromeControls cog share one PreferencesModal instance.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsReturnFocusRef = useRef<HTMLButtonElement>(null);
 
   // "What's New": the unread dot lives on the rail, the modal is shell-owned.
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
@@ -82,7 +83,10 @@ export function AppShell() {
         <div className={`relative z-10 flex ${responsiveDraftChrome ? "h-full min-h-0" : "min-h-screen"}`}>
           {!phoneDraftChrome && (
             <Rail
-              onSettings={() => setSettingsOpen(true)}
+              onSettings={(launcher) => {
+                settingsReturnFocusRef.current = launcher;
+                setSettingsOpen(true);
+              }}
               onWhatsNew={openWhatsNew}
               hasUnread={changelog.hasUnread}
             />
@@ -159,6 +163,7 @@ export function AppShell() {
         <ChromeControls
           settingsOpen={settingsOpen}
           onSettingsOpenChange={setSettingsOpen}
+          settingsReturnFocusRef={settingsReturnFocusRef}
           hideVolume={phoneDraftChrome}
           hideLanguage={phoneDraftChrome}
         />

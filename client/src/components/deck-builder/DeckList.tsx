@@ -39,7 +39,7 @@ interface DeckListProps {
   onSetAsCommander?: (name: string) => void;
   isCommanderEligible?: (name: string) => boolean;
   /** Touch path for art selection — forwarded to each row's ✦ badge. */
-  onOpenArtPicker?: (name: string) => void;
+  onOpenArtPicker?: (name: string, launcher: HTMLButtonElement) => void;
   /** Designated commander(s). Rendered as a pinned section above the section
    *  tabs (mirroring the visual stack's Commander lane) so the commander stays
    *  visible/removable in list view — on mobile the Info-panel CommanderPanel

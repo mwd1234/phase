@@ -211,7 +211,12 @@ function CommanderCard({
         if (firedRef.current) return;
         if (useUiStore.getState().debugInteractionMode) {
           e.stopPropagation();
-          useUiStore.getState().openDebugContextMenu({ objectId: commander.id, x: e.clientX, y: e.clientY });
+          useUiStore.getState().openDebugContextMenu({
+            objectId: commander.id,
+            x: e.clientX,
+            y: e.clientY,
+            surface: "game",
+          });
           return;
         }
         // Commander ninjutsu is a click affordance (unlike drag-to-cast): a

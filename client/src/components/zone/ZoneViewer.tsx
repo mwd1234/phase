@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { GameAction, GameObject } from "../../adapter/types.ts";
@@ -24,11 +24,15 @@ import {
   playOrCastActionsForObject,
   resolveSingleActionDispatch,
 } from "../../viewmodel/cardActionChoice.ts";
+import { DebugCardContextMenu } from "../chrome/DebugCardContextMenu.tsx";
+import { debugContextMenuPoint } from "../chrome/debugContextMenuPosition.ts";
 
 interface ZoneViewerProps {
   zone: "graveyard" | "exile" | "library";
   playerId: number;
   onClose: () => void;
+  onPrepareActionClose?: () => void;
+  returnFocusRef?: RefObject<HTMLElement | SVGElement | null>;
 }
 
 const ZONE_TITLE_KEYS: Record<string, string> = {
@@ -43,7 +47,13 @@ const ZONE_TITLE_LOWER_KEYS: Record<string, string> = {
   library: "zone.libraryLower",
 };
 
-export function ZoneViewer({ zone, playerId, onClose }: ZoneViewerProps) {
+export function ZoneViewer({
+  zone,
+  playerId,
+  onClose,
+  onPrepareActionClose,
+  returnFocusRef,
+}: ZoneViewerProps) {
   const { t } = useTranslation("game");
   const objects = useGameStore((s) => s.gameState?.objects);
   const gameState = useGameStore((s) => s.gameState);
@@ -52,6 +62,9 @@ export function ZoneViewer({ zone, playerId, onClose }: ZoneViewerProps) {
   const legalActionsByObject = useGameStore((s) => s.legalActionsByObject);
   const inspectObject = useUiStore((s) => s.inspectObject);
   const setPendingAbilityChoice = useUiStore((s) => s.setPendingAbilityChoice);
+  const openDebugContextMenu = useUiStore((s) => s.openDebugContextMenu);
+  const debugInteractionMode = useUiStore((s) => s.debugInteractionMode);
+  const debugMenuAnchorRef = useRef<HTMLElement | null>(null);
   const dispatchAction = useGameDispatch();
   const canActForWaitingState = useCanActForWaitingState();
   const viewerId = usePlayerId();
@@ -97,6 +110,11 @@ export function ZoneViewer({ zone, playerId, onClose }: ZoneViewerProps) {
   // auto-vs-confirm authority — never re-decided inline here.
   const handleCast = useCallback(
     (target: GameObject, actions: GameAction[]) => {
+      // Casting/play dispatch is asynchronous. Hand focus restoration to a
+      // durable launcher before dispatch starts, because the viewer unmounts
+      // immediately and the focused pile may disappear only when the engine's
+      // later snapshot removes its final card.
+      onPrepareActionClose?.();
       inspectObject(null);
       const auto = resolveSingleActionDispatch(actions, target);
       if (auto) {
@@ -106,7 +124,7 @@ export function ZoneViewer({ zone, playerId, onClose }: ZoneViewerProps) {
       }
       onClose();
     },
-    [dispatch, inspectObject, setPendingAbilityChoice, onClose],
+    [dispatch, inspectObject, onClose, onPrepareActionClose, setPendingAbilityChoice],
   );
 
   const zoneLabel = t(ZONE_TITLE_KEYS[zone]);
@@ -115,6 +133,7 @@ export function ZoneViewer({ zone, playerId, onClose }: ZoneViewerProps) {
     <ModalPanelShell
       title={t("zone.zoneTitle", { zone: t(ZONE_TITLE_KEYS[zone]), count: cards.length })}
       onClose={onClose}
+      returnFocusRef={returnFocusRef}
       maxWidthClassName="max-w-5xl"
       bodyClassName="flex min-h-0 flex-col"
       overlayClassName="z-[60]"
@@ -176,6 +195,16 @@ export function ZoneViewer({ zone, playerId, onClose }: ZoneViewerProps) {
                     name: isHiddenFromViewer ? t("card.faceDownName") : obj.name,
                   })}
                   hiddenFromViewer={isHiddenFromViewer}
+                  debugInteractionMode={debugInteractionMode}
+                  onOpenDebugMenu={(launcher, x, y) => {
+                    debugMenuAnchorRef.current = launcher;
+                    const point = debugContextMenuPoint(launcher, x, y);
+                    openDebugContextMenu({
+                      objectId: obj.id,
+                      ...point,
+                      surface: "zone-viewer",
+                    });
+                  }}
                   canDelve={delveActions.length > 0}
                   onDelve={() => {
                     const auto = resolveSingleActionDispatch(delveActions, obj);
@@ -193,6 +222,10 @@ export function ZoneViewer({ zone, playerId, onClose }: ZoneViewerProps) {
           </ScrollableCardStrip>
         )}
       </div>
+      <DebugCardContextMenu
+        surface="zone-viewer"
+        anchorRef={debugMenuAnchorRef}
+      />
     </ModalPanelShell>
   );
 }
@@ -204,6 +237,8 @@ function ZoneCard({
   canDelve,
   castTitle,
   hiddenFromViewer,
+  debugInteractionMode,
+  onOpenDebugMenu,
   onTarget,
   onCast,
   onDelve,
@@ -214,6 +249,12 @@ function ZoneCard({
   canDelve: boolean;
   castTitle: string;
   hiddenFromViewer: boolean;
+  debugInteractionMode: boolean;
+  onOpenDebugMenu: (
+    launcher: HTMLButtonElement,
+    x: number,
+    y: number,
+  ) => void;
   onTarget: () => void;
   onCast: () => void;
   onDelve: () => void;
@@ -222,34 +263,32 @@ function ZoneCard({
   // click that follows it in the capture phase, so this component needs neither
   // its own useLongPress nor a firedRef guard here.
   const hoverProps = useInspectHoverProps();
+  const interactive = debugInteractionMode || isValidTarget || canDelve || canCast;
 
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    if (useUiStore.getState().debugInteractionMode) {
+  const handleClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    if (debugInteractionMode) {
       e.stopPropagation();
-      useUiStore.getState().openDebugContextMenu({ objectId: obj.id, x: e.clientX, y: e.clientY });
+      onOpenDebugMenu(e.currentTarget, e.clientX, e.clientY);
       return;
     }
     if (isValidTarget) { onTarget(); return; }
     if (canDelve) { onDelve(); return; }
     if (canCast) onCast();
-  }, [obj.id, isValidTarget, canDelve, canCast, onTarget, onDelve, onCast]);
+  }, [debugInteractionMode, isValidTarget, canDelve, canCast, onOpenDebugMenu, onTarget, onDelve, onCast]);
 
-  return (
-    <div
-      className={`group relative inline-flex shrink-0 cursor-pointer rounded-lg transition-transform ${
-        isValidTarget
-          ? CASTABLE_AFFORDANCE_ACTIVE
-          : canDelve
-            ? "ring-2 ring-cyan-400 shadow-[0_0_14px_4px_rgba(34,211,238,0.55)]"
-          : canCast
-            ? "hover:scale-[1.03]"
-            : "hover:ring-1 hover:ring-white/20"
-      }`}
-      title={canCast && !isValidTarget ? castTitle : undefined}
-      data-object-id={hiddenFromViewer ? undefined : obj.id}
-      {...hoverProps(obj.id)}
-      onClick={handleClick}
-    >
+  const className = `group relative inline-flex shrink-0 rounded-lg transition-transform ${
+    interactive ? "cursor-pointer " : ""
+  }${
+    isValidTarget
+      ? CASTABLE_AFFORDANCE_ACTIVE
+      : canDelve
+        ? "ring-2 ring-cyan-400 shadow-[0_0_14px_4px_rgba(34,211,238,0.55)]"
+        : canCast
+          ? "hover:scale-[1.03]"
+          : "hover:ring-1 hover:ring-white/20"
+  }`;
+  const content = (
+    <>
       {/* Resolve the image via the engine's printed_ref (oracle_id + face)
           like every other object-rendering modal — name-only lookup fails for
           DFC / transformed / back-face cards (e.g. a transformed planeswalker),
@@ -272,6 +311,27 @@ function ZoneCard({
           <div className="pointer-events-none absolute inset-0 rounded-lg ring-2 ring-purple-400/70 shadow-[0_0_12px_3px_rgba(147,51,234,0.5)]" />
         </>
       )}
-    </div>
+    </>
+  );
+
+  const sharedProps = {
+    className,
+    title: canCast && !isValidTarget ? castTitle : undefined,
+    "data-object-id": hiddenFromViewer ? undefined : obj.id,
+    ...hoverProps(obj.id),
+  };
+
+  if (!interactive) {
+    return <div {...sharedProps}>{content}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      {...sharedProps}
+      onClick={handleClick}
+    >
+      {content}
+    </button>
   );
 }

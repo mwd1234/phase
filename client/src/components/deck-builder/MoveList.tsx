@@ -41,7 +41,7 @@ export interface MoveListProps {
    *  See `CardEntryRowProps`. */
   density?: "comfortable" | "compact";
   /** Forwarded to each row's alternate-art badge. See `CardEntryRowProps`. */
-  onOpenArtPicker?: (name: string) => void;
+  onOpenArtPicker?: (name: string, launcher: HTMLButtonElement) => void;
   /** Forwarded to each row's move button as the destination label. See
    *  `CardEntryRowProps.moveTargetLabel`. */
   moveTargetLabel?: string;

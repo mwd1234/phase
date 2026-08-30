@@ -1,4 +1,13 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useRef, useState } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { GameAction, GameObject } from "../../../adapter/types.ts";
@@ -66,6 +75,47 @@ function makeState(object: GameObject) {
   });
 }
 
+function ActionCloseFocusHarness() {
+  const [open, setOpen] = useState(false);
+  const launcherRef = useRef<HTMLButtonElement | null>(null);
+  const fallbackRef = useRef<HTMLButtonElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | SVGElement | null>(null);
+  const launcherExists = useGameStore(
+    (state) => (state.gameState?.players[0]?.graveyard.length ?? 0) > 0,
+  );
+
+  return (
+    <>
+      {launcherExists && (
+        <button
+          ref={launcherRef}
+          type="button"
+          onClick={() => {
+            returnFocusRef.current = launcherRef.current;
+            setOpen(true);
+          }}
+        >
+          Graveyard pile
+        </button>
+      )}
+      <button ref={fallbackRef} type="button">
+        Game menu
+      </button>
+      {open && (
+        <ZoneViewer
+          zone="graveyard"
+          playerId={0}
+          returnFocusRef={returnFocusRef}
+          onPrepareActionClose={() => {
+            returnFocusRef.current = fallbackRef.current;
+          }}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
 describe("ZoneViewer", () => {
   const dispatch = vi.fn(async () => []);
 
@@ -97,7 +147,15 @@ describe("ZoneViewer", () => {
   });
 
   it("dispatches an engine-provided graveyard CastSpell action", () => {
-    render(<ZoneViewer zone="graveyard" playerId={0} onClose={vi.fn()} />);
+    const prepareActionClose = vi.fn();
+    render(
+      <ZoneViewer
+        zone="graveyard"
+        playerId={0}
+        onClose={vi.fn()}
+        onPrepareActionClose={prepareActionClose}
+      />,
+    );
 
     // The castable card carries the purple "playable" affordance instead of a
     // labeled button; clicking the card itself routes through handleCast and
@@ -108,12 +166,97 @@ describe("ZoneViewer", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ type: "CastSpell" }),
     );
+    expect(prepareActionClose).toHaveBeenCalledTimes(1);
+    expect(prepareActionClose.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatch.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("hands action-close focus to a durable target before an async final-card snapshot", async () => {
+    let resolveDispatch!: (events: never[]) => void;
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise<never[]>((resolve) => {
+          resolveDispatch = resolve;
+        }),
+    );
+    render(<ActionCloseFocusHarness />);
+    fireEvent.click(screen.getByRole("button", { name: "Graveyard pile" }));
+    const dialog = screen.getByRole("dialog", { name: /Graveyard/ });
+    await waitFor(() => expect(dialog).toHaveFocus());
+
+    fireEvent.click(screen.getByTestId("card-image"));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    const gameMenu = screen.getByRole("button", { name: "Game menu" });
+    expect(gameMenu).toHaveFocus();
+
+    const current = useGameStore.getState().gameState!;
+    act(() => {
+      useGameStore.setState({
+        gameState: {
+          ...current,
+          objects: {},
+          players: current.players.map((player) =>
+            player.id === 0 ? { ...player, graveyard: [] } : player,
+          ),
+        },
+      });
+      resolveDispatch([]);
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Graveyard pile" }),
+    ).not.toBeInTheDocument();
+    expect(gameMenu).toHaveFocus();
+    expect(document.body).not.toHaveFocus();
   });
 
   it("identifies visible zone cards for contextual errors", () => {
     render(<ZoneViewer zone="graveyard" playerId={0} onClose={vi.fn()} />);
 
     expect(screen.getByTestId("card-image").parentElement).toHaveAttribute("data-object-id", "7");
+  });
+
+  it("keeps debug card actions inside the zone viewer focus authority", async () => {
+    const onClose = vi.fn();
+    useUiStore.setState({ debugInteractionMode: true });
+    render(<ZoneViewer zone="graveyard" playerId={0} onClose={onClose} />);
+
+    const dialog = screen.getByRole("dialog", { name: /Graveyard/ });
+    await waitFor(() => expect(dialog).toHaveFocus());
+    const card = within(dialog).getByRole("button", { name: "Flame Jab" });
+    vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
+      bottom: 340,
+      height: 140,
+      left: 120,
+      right: 220,
+      top: 200,
+      width: 100,
+      x: 120,
+      y: 200,
+      toJSON: () => ({}),
+    });
+    fireEvent.click(card);
+
+    const menu = screen.getByRole("menu");
+    expect(dialog).not.toContainElement(menu);
+    expect(menu).toHaveStyle({ left: "170px", top: "270px" });
+    const firstMenuItem = within(menu).getAllByRole("menuitem")[0];
+    expect(firstMenuItem).toHaveFocus();
+
+    fireEvent.keyDown(firstMenuItem, { key: "Escape" });
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(card).toHaveFocus());
+  });
+
+  it("does not expose an inert visible card as a button", () => {
+    useGameStore.setState({ legalActions: [], legalActionsByObject: {} });
+    render(<ZoneViewer zone="graveyard" playerId={0} onClose={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Flame Jab" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Flame Jab")).toBeInTheDocument();
   });
 
   it("resolves graveyard card art via printed_ref oracle_id, not name", () => {

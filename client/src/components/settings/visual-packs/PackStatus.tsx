@@ -51,9 +51,9 @@ interface PackStatusProps {
   durableMutationActive: boolean;
   onVerify(mode: "metadata" | "full"): void;
   onRepair(ids: PackId[]): void;
-  onRemoveSelected(ids: PackId[]): void;
-  onRemoveComplete(): void;
-  onRemoveAll(): void;
+  onRemoveSelected(ids: PackId[], launcher: HTMLButtonElement): void;
+  onRemoveComplete(launcher: HTMLButtonElement): void;
+  onRemoveAll(launcher: HTMLButtonElement): void;
 }
 
 export function PackStatus({
@@ -135,9 +135,9 @@ export function PackStatus({
         <button type="button" disabled={pendingActions.has("verify:metadata")} onClick={() => onVerify("metadata")} className="min-h-11 rounded-[12px] border border-white/15 px-3 text-sm text-slate-100 disabled:opacity-40">{t("visualPacks.actions.verifyMetadata")}</button>
         <button type="button" disabled={pendingActions.has("verify:full")} onClick={() => onVerify("full")} className="min-h-11 rounded-[12px] border border-white/15 px-3 text-sm text-slate-100 disabled:opacity-40">{t("visualPacks.actions.verifyFull")}</button>
         <button type="button" disabled={durableMutationActive || mutationPending || selectedIds.length === 0} onClick={() => onRepair(selectedIds)} className="min-h-11 rounded-[12px] border border-sky-400/40 px-3 text-sm text-sky-100 disabled:opacity-40">{t("visualPacks.actions.repair")}</button>
-        <button type="button" disabled={durableMutationActive || mutationPending || selectedIds.length === 0} onClick={() => onRemoveSelected(selectedIds)} className="min-h-11 rounded-[12px] border border-rose-400/40 px-3 text-sm text-rose-100 disabled:opacity-40">{t("visualPacks.actions.removeSelected")}</button>
-        <button type="button" disabled={durableMutationActive || mutationPending} onClick={onRemoveComplete} className="min-h-11 rounded-[12px] border border-rose-400/40 px-3 text-sm text-rose-100 disabled:opacity-40">{t("visualPacks.actions.removeComplete")}</button>
-        <button type="button" disabled={durableMutationActive || mutationPending} onClick={onRemoveAll} className="min-h-11 rounded-[12px] border border-rose-400/40 px-3 text-sm text-rose-100 disabled:opacity-40">{t("visualPacks.actions.removeAll")}</button>
+        <button type="button" disabled={durableMutationActive || mutationPending || selectedIds.length === 0} onClick={(event) => onRemoveSelected(selectedIds, event.currentTarget)} className="min-h-11 rounded-[12px] border border-rose-400/40 px-3 text-sm text-rose-100 disabled:opacity-40">{t("visualPacks.actions.removeSelected")}</button>
+        <button type="button" disabled={durableMutationActive || mutationPending} onClick={(event) => onRemoveComplete(event.currentTarget)} className="min-h-11 rounded-[12px] border border-rose-400/40 px-3 text-sm text-rose-100 disabled:opacity-40">{t("visualPacks.actions.removeComplete")}</button>
+        <button type="button" disabled={durableMutationActive || mutationPending} onClick={(event) => onRemoveAll(event.currentTarget)} className="min-h-11 rounded-[12px] border border-rose-400/40 px-3 text-sm text-rose-100 disabled:opacity-40">{t("visualPacks.actions.removeAll")}</button>
       </div>
       {verification && (
         <div aria-live="polite" className="text-xs text-slate-300">

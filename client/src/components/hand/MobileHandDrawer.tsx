@@ -102,7 +102,7 @@ export function MobileHandDrawer() {
   const handleDebugOpen = useCallback(
     (objectId: number, x: number, y: number) => {
       setOpen(false);
-      openDebugContextMenu({ objectId, x, y });
+      openDebugContextMenu({ objectId, x, y, surface: "game" });
     },
     [setOpen, openDebugContextMenu],
   );

@@ -232,13 +232,23 @@ function BrowseLibraryForm() {
   const openDebugLibraryViewer = useUiStore((s) => s.openDebugLibraryViewer);
   const perspectivePlayerId = usePerspectivePlayerId();
 
+  const openLibrary = () => {
+    // DebugPanel sits above ordinary modal layers. Close it before mounting the
+    // aria-modal library viewer, just like the panel's Report Card action, so
+    // no visually higher background surface remains pointer-accessible.
+    if (useUiStore.getState().debugPanelOpen) {
+      useUiStore.getState().toggleDebugPanel();
+    }
+    openDebugLibraryViewer(perspectivePlayerId);
+  };
+
   return (
     <>
       <p className="mb-2 px-2 text-[10px] text-gray-500">
         Opens a modal of your library in randomized order. Click a card to move
         it to any zone, or use the quick Battlefield / Hand buttons.
       </p>
-      <SubmitButton onClick={() => openDebugLibraryViewer(perspectivePlayerId)}>
+      <SubmitButton onClick={openLibrary}>
         Browse Library
       </SubmitButton>
     </>

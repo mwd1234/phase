@@ -30,7 +30,7 @@ interface LibraryPileProps {
    * graveyard/exile click→view→cast flow. Without this prop the pile falls back
    * to its standalone click-to-play behavior.
    */
-  onView?: () => void;
+  onView?: (launcher: HTMLButtonElement) => void;
 }
 
 function VisibleTopCard({ object }: { object: GameObject }) {
@@ -179,12 +179,12 @@ export function LibraryPile({ playerId, size, onView }: LibraryPileProps) {
       {/* Top card */}
       <button
         type="button"
-        onClick={() => {
+        onClick={(event) => {
           // Prefer opening the viewer when the top is visible — the modal is
           // where play-from-top happens (mirrors graveyard/exile). Fall back to
           // direct cast only when no viewer is wired.
           if (canView) {
-            onView();
+            onView(event.currentTarget);
             return;
           }
           if (canPlay) handlePlay();

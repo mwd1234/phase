@@ -9,6 +9,12 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import {
+  isEffectivelyDisabled,
+  isFocusTargetAvailable,
+  isRendered,
+  type FocusTarget,
+} from "./focusTarget";
 
 const TABBABLE_SELECTOR = [
   "a[href]",
@@ -23,32 +29,6 @@ const TABBABLE_SELECTOR = [
   '[contenteditable]:not([contenteditable="false"])',
   "[tabindex]",
 ].join(",");
-
-function isRendered(element: Element, container: Element | null = null): boolean {
-  for (let current: Element | null = element; current; current = current.parentElement) {
-    const style = window.getComputedStyle(current);
-    if (
-      current.hasAttribute("hidden") ||
-      current.hasAttribute("inert") ||
-      current.getAttribute("aria-hidden") === "true" ||
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      style.visibility === "collapse" ||
-      style.contentVisibility === "hidden"
-    ) {
-      return false;
-    }
-
-    if (current instanceof HTMLDetailsElement && !current.open) {
-      const summary = Array.from(current.children).find(
-        (child) => child.tagName === "SUMMARY",
-      );
-      if (!summary?.contains(element)) return false;
-    }
-    if (current === container) break;
-  }
-  return true;
-}
 
 function isRadioGroupTabStop(
   element: HTMLElement,
@@ -66,19 +46,6 @@ function isRadioGroupTabStop(
       candidate.form === element.form,
   );
   return element === (group.find((radio) => radio.checked) ?? group[0]);
-}
-
-function isEffectivelyDisabled(element: Element): boolean {
-  if (element.matches(":disabled")) return true;
-
-  for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
-    if (ancestor.tagName !== "FIELDSET" || !ancestor.hasAttribute("disabled")) continue;
-    const firstLegend = Array.from(ancestor.children).find(
-      (child) => child.tagName === "LEGEND",
-    );
-    if (!firstLegend?.contains(element)) return true;
-  }
-  return false;
 }
 
 function isEmbeddedBrowsingContext(element: Element): boolean {
@@ -119,19 +86,7 @@ function tabbableElements(container: HTMLElement): HTMLElement[] {
 
 type LayerId = symbol;
 type ScopeId = symbol;
-type FocusTarget = HTMLElement | SVGElement;
 type FocusCandidate = () => FocusTarget | null;
-
-function isFocusTargetAvailable(
-  target: FocusTarget | null | undefined,
-): target is FocusTarget {
-  return Boolean(
-    target?.isConnected &&
-      !(target instanceof HTMLInputElement && target.type === "hidden") &&
-      !isEffectivelyDisabled(target) &&
-      isRendered(target),
-  );
-}
 
 function tryFocusTarget(target: FocusTarget | null | undefined): boolean {
   if (!isFocusTargetAvailable(target)) return false;
@@ -207,6 +162,7 @@ function activeElement(): FocusTarget | null {
 function createFocusScopeManager(): FocusScopeManager {
   let layers: FocusLayer[] = [];
   let sequence = 0;
+  const recoveryCleanups = new Map<LayerId, () => void>();
   // Layout cleanup records ownership before portal nodes disappear. Passive
   // cleanup restores afterward so React's commit-time focus preservation
   // cannot pull focus back into an exiting Framer Motion element.
@@ -280,6 +236,8 @@ function createFocusScopeManager(): FocusScopeManager {
     focused === document.body || layerContainsTarget(layer, focused);
 
   const unregister = (layer: FocusLayer) => {
+    recoveryCleanups.get(layer.id)?.();
+    recoveryCleanups.delete(layer.id);
     const focused = activeElement();
     const shouldRestore = layerOwnsFocus(layer, focused);
     const ownedRoots = [
@@ -309,6 +267,71 @@ function createFocusScopeManager(): FocusScopeManager {
         parentScopeId: parent?.scopeId ?? null,
       });
     }
+  };
+
+  const watchFocusedDescendant = (layer: FocusLayer) => {
+    let lastFocused = layer.owner.contains(activeElement())
+      ? activeElement()
+      : null;
+    const rememberFocus = (event: FocusEvent) => {
+      const target = event.target;
+      if (
+        (target instanceof HTMLElement || target instanceof SVGElement) &&
+        topLayerFrom(
+          activeLayers().filter((candidate) =>
+            candidate.owner.contains(target),
+          ),
+        ) === layer
+      ) {
+        lastFocused = target;
+      }
+    };
+    const observer = new MutationObserver((records) => {
+      const removed = lastFocused;
+      if (
+        !removed ||
+        !records.some((record) =>
+          Array.from(record.removedNodes).some(
+            (node) => node === removed || node.contains(removed),
+          ),
+        )
+      ) {
+        return;
+      }
+      const focused = activeElement();
+      if (focused && focused !== document.body) {
+        // A keyed React reorder reports a removal even when the same focused
+        // node is reinserted and remains active. No new focusin fires for that
+        // move, so retain the deepest layer's memory for a later true removal.
+        lastFocused =
+          topLayerFrom(
+            activeLayers().filter((candidate) =>
+              candidate.owner.contains(focused),
+            ),
+          ) === layer
+            ? focused
+            : null;
+        return;
+      }
+      lastFocused = null;
+
+      const active = activeLayers();
+      if (!active.includes(layer)) return;
+      const top = topLayerFrom(active);
+      if (top) focusLayerFallback(top);
+    });
+    layer.owner.addEventListener("focusin", rememberFocus);
+    observer.observe(layer.owner, { childList: true, subtree: true });
+    recoveryCleanups.set(layer.id, () => {
+      layer.owner.removeEventListener("focusin", rememberFocus);
+      observer.disconnect();
+    });
+  };
+
+  const registerLayer = (layer: FocusLayer) => {
+    layers.push(layer);
+    watchFocusedDescendant(layer);
+    return () => unregister(layer);
   };
 
   const restorationForFocus = (
@@ -358,8 +381,7 @@ function createFocusScopeManager(): FocusScopeManager {
         () => focused,
       ],
     };
-    layers.push(layer);
-    return () => unregister(layer);
+    return registerLayer(layer);
   };
 
   const registerPortalBranch = (registration: PortalBranchRegistration) => {
@@ -369,8 +391,7 @@ function createFocusScopeManager(): FocusScopeManager {
       ...registration,
       sequence: sequence++,
     };
-    layers.push(layer);
-    return () => unregister(layer);
+    return registerLayer(layer);
   };
 
   const topLayerFrom = (candidates: FocusLayer[]) =>
@@ -585,8 +606,11 @@ export function FocusScope({
   children,
 }: FocusScopeProps) {
   const parent = useContext(FocusScopeContext);
-  const ownedManager = useMemo(() => createFocusScopeManager(), []);
-  const manager = parent?.manager ?? ownedManager;
+  const ownedManagerRef = useRef<FocusScopeManager | null>(null);
+  if (ownedManagerRef.current === null) {
+    ownedManagerRef.current = createFocusScopeManager();
+  }
+  const manager = parent?.manager ?? ownedManagerRef.current;
   const scopeId = useRef<ScopeId>(Symbol("focus-scope")).current;
   const depth = (parent?.depth ?? -1) + 1;
   const onEscapeRef = useRef(onEscape);

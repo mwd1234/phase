@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 
@@ -34,6 +40,8 @@ interface GameMenuProps {
   onTryMultiplayerSplitLayout?: () => void;
   onDismissMultiplayerSplitLayoutNudge?: () => void;
   onSettingsClick: () => void;
+  /** Optional shared authority for the persistent hamburger launcher. */
+  menuTriggerRef?: RefObject<HTMLButtonElement | null>;
   onHelpClick: () => void;
   onConcede?: () => void;
   /** GH #1507: ask every other human player to approve rolling the game
@@ -67,6 +75,7 @@ export function GameMenu({
   onTryMultiplayerSplitLayout,
   onDismissMultiplayerSplitLayoutNudge,
   onSettingsClick,
+  menuTriggerRef,
   onHelpClick,
   onConcede,
   onRequestTakeback,
@@ -83,7 +92,8 @@ export function GameMenu({
   const [searchParams] = useSearchParams();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const ownedMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const resolvedMenuTriggerRef = menuTriggerRef ?? ownedMenuTriggerRef;
   const cardDataMeta = useCardDataMeta();
   const isDraft = searchParams.get("source") === "draft" && !!searchParams.get("draftId");
   const isDraftPodMatch = searchParams.get("mode") === "draft-match";
@@ -106,7 +116,7 @@ export function GameMenu({
     // The selected menu item unmounts as this dropdown closes. Move focus to
     // its stable launcher first so the surface can capture a durable return
     // target rather than <body> during the same React commit.
-    menuTriggerRef.current?.focus();
+    resolvedMenuTriggerRef.current?.focus();
     setOpen(false);
     openSurface();
   };
@@ -136,7 +146,7 @@ export function GameMenu({
     >
       <div className="flex h-9 w-9 items-center justify-center rounded-full border border-cyan-200/45 bg-slate-950/84 shadow-[0_8px_22px_rgba(0,0,0,0.32),0_0_14px_rgba(34,211,238,0.22)] backdrop-blur-md">
         <button
-          ref={menuTriggerRef}
+          ref={resolvedMenuTriggerRef}
           onClick={() => {
             setOpen(!open);
           }}
@@ -292,15 +302,15 @@ export function GameMenu({
             label={t("gameMenu.concede")}
             variant="danger"
             onClick={() => {
-              setOpen(false);
               // Online concedes route through the confirmation dialog
               // (`onConcede` opens it). All other modes go straight through
               // the unified concede hook, which dispatches `Concede` to the
               // engine before clearing local state — see useConcedeHandler.
               if (isOnlineMode && onConcede) {
-                onConcede();
+                openSurfaceFromMenu(onConcede);
                 return;
               }
+              setOpen(false);
               handleConcede();
             }}
           />

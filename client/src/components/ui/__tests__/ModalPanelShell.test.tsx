@@ -153,6 +153,68 @@ describe("ModalPanelShell", () => {
     expect(lastControl).toHaveFocus();
   });
 
+  it("recovers inside the modal when a focused descendant is removed", async () => {
+    function RemovingControl() {
+      const [visible, setVisible] = useState(true);
+      return visible ? (
+        <button type="button" onClick={() => setVisible(false)}>
+          Remove focused control
+        </button>
+      ) : (
+        <p>Control removed</p>
+      );
+    }
+
+    render(shell({ children: <RemovingControl /> }));
+    const control = screen.getByRole("button", {
+      name: "Remove focused control",
+    });
+    control.focus();
+    fireEvent.click(control);
+
+    const dialog = screen.getByRole("dialog", { name: "Edit deck" });
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "Close Edit deck" }),
+      ).toHaveFocus(),
+    );
+    expect(document.body).not.toHaveFocus();
+  });
+
+  it("does not steal an explicit successor focus after an unrelated mutation", async () => {
+    const successor = appendExternalButton();
+    successor.textContent = "Successor";
+    const view = render(
+      shell({
+        children: (
+          <>
+            <button type="button">Remembered control</button>
+            <p>Before mutation</p>
+          </>
+        ),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Edit deck" })).toHaveFocus(),
+    );
+    screen.getByRole("button", { name: "Remembered control" }).focus();
+    successor.focus();
+
+    view.rerender(
+      shell({
+        children: (
+          <>
+            <button type="button">Remembered control</button>
+            <p>After mutation</p>
+          </>
+        ),
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("After mutation")).toBeInTheDocument());
+    expect(successor).toHaveFocus();
+  });
+
   it("keeps the complete positive tabIndex sequence inside the modal", async () => {
     const user = userEvent.setup();
     const outside = appendExternalButton();
@@ -507,6 +569,62 @@ describe("ModalPanelShell", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("recovers within an open portal branch when its focused option is removed", async () => {
+    const modal = (items: Array<{ value: string; label: string }>) =>
+      shell({
+        children: (
+          <MenuSelect
+            label="Board style"
+            items={items}
+            onSelect={vi.fn()}
+          />
+        ),
+      });
+    const view = render(
+      modal([
+        { value: "classic", label: "Classic" },
+        { value: "modern", label: "Modern" },
+      ]),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Board style" }));
+    expect(screen.getByRole("option", { name: "Classic" })).toHaveFocus();
+
+    view.rerender(modal([{ value: "modern", label: "Modern" }]));
+
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Modern" })).toHaveFocus(),
+    );
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("remembers a focused portal option across a reorder before its removal", async () => {
+    const modal = (items: Array<{ value: string; label: string }>) =>
+      shell({
+        children: (
+          <MenuSelect
+            label="Board style"
+            items={items}
+            onSelect={vi.fn()}
+          />
+        ),
+      });
+    const classic = { value: "classic", label: "Classic" };
+    const modern = { value: "modern", label: "Modern" };
+    const view = render(modal([classic, modern]));
+    fireEvent.click(screen.getByRole("button", { name: "Board style" }));
+    const focused = screen.getByRole("option", { name: "Classic" });
+    expect(focused).toHaveFocus();
+
+    view.rerender(modal([modern, classic]));
+    expect(screen.getByRole("option", { name: "Classic" })).toBe(focused);
+    expect(focused).toHaveFocus();
+
+    view.rerender(modal([modern]));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Modern" })).toHaveFocus(),
+    );
   });
 
   it("restores a portaled select trigger after an option is chosen", () => {

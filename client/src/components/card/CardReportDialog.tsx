@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { GameObject, PlayerId, Zone } from "../../adapter/types.ts";
@@ -85,7 +85,11 @@ function reportKey(identity: ReportIdentity): string {
  * list instead of chasing the hover preview. Reads engine-provided state only
  * (objects + reveal sets + parse details) and formats it — no game logic.
  */
-export function CardReportDialog() {
+export function CardReportDialog({
+  returnFocusRef,
+}: {
+  returnFocusRef?: RefObject<HTMLElement | SVGElement | null>;
+}) {
   const { t } = useTranslation("game");
   const open = useUiStore((s) => s.cardReportDialogOpen);
   const close = useUiStore((s) => s.closeCardReportDialog);
@@ -164,6 +168,7 @@ export function CardReportDialog() {
       title={t("cardReport.title")}
       subtitle={t("cardReport.subtitle")}
       onClose={close}
+      returnFocusRef={returnFocusRef}
       maxWidthClassName="max-w-lg"
       bodyClassName="flex flex-col"
     >

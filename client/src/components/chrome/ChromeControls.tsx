@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 
@@ -16,6 +16,8 @@ interface ChromeControlsProps {
   onSettingsOpenChange?: (open: boolean) => void;
   hideVolume?: boolean;
   hideLanguage?: boolean;
+  /** Shared launcher authority when settings state is owned by an ancestor. */
+  settingsReturnFocusRef?: RefObject<HTMLButtonElement | null>;
 }
 
 function SettingsIcon() {
@@ -46,16 +48,25 @@ export function ChromeControls({
   onSettingsOpenChange,
   hideVolume = false,
   hideLanguage = false,
+  settingsReturnFocusRef,
 }: ChromeControlsProps) {
   const { t } = useTranslation();
   const language = usePreferencesStore((s) => s.language);
   const [internalShowSettings, setInternalShowSettings] = useState(false);
+  const ownedSettingsReturnFocusRef = useRef<HTMLButtonElement>(null);
+  const resolvedSettingsReturnFocusRef =
+    settingsReturnFocusRef ?? ownedSettingsReturnFocusRef;
   const isSettingsControlled = settingsOpen !== undefined;
   const showSettings = isSettingsControlled ? settingsOpen : internalShowSettings;
 
   const setShowSettings = (open: boolean) => {
     if (!isSettingsControlled) setInternalShowSettings(open);
     onSettingsOpenChange?.(open);
+  };
+
+  const openSettingsFrom = (launcher: HTMLButtonElement) => {
+    resolvedSettingsReturnFocusRef.current = launcher;
+    setShowSettings(true);
   };
 
   return (
@@ -74,7 +85,7 @@ export function ChromeControls({
             })}
             whileHover={{ y: -1 }}
             whileTap={{ scale: 0.98 }}
-            onClick={() => setShowSettings(true)}
+            onClick={(event) => openSettingsFrom(event.currentTarget)}
             aria-label={t("chrome.languageSettings", { lang: language.toUpperCase() })}
             title={t("chrome.languageTitle", { lang: language.toUpperCase() })}
           >
@@ -89,7 +100,7 @@ export function ChromeControls({
           })}
           whileHover={{ y: -1 }}
           whileTap={{ scale: 0.98 }}
-          onClick={() => setShowSettings(true)}
+          onClick={(event) => openSettingsFrom(event.currentTarget)}
           aria-label={t("chrome.settings")}
           title={t("chrome.settings")}
         >
@@ -102,7 +113,12 @@ export function ChromeControls({
         <FullscreenButton variant="chrome" />
       </div>
 
-      {showSettings && <PreferencesModal onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <PreferencesModal
+          onClose={() => setShowSettings(false)}
+          returnFocusRef={resolvedSettingsReturnFocusRef}
+        />
+      )}
     </>
   );
 }

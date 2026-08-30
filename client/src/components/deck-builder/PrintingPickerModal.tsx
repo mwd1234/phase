@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type RefObject,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { useCardImage } from "../../hooks/useCardImage.ts";
@@ -14,6 +20,7 @@ interface PrintingPickerModalProps {
   oracleId: string;
   onCardHover?: CardHoverHandler;
   onClose: () => void;
+  returnFocusRef?: RefObject<HTMLElement | SVGElement | null>;
 }
 
 const INITIAL_PAGE_SIZE = 30;
@@ -94,6 +101,7 @@ export function PrintingPickerModal({
   oracleId,
   onCardHover,
   onClose,
+  returnFocusRef,
 }: PrintingPickerModalProps) {
   const { t } = useTranslation("deck-builder");
   const [printings, setPrintings] = useState<PrintingEntry[] | null>(null);
@@ -155,6 +163,7 @@ export function PrintingPickerModal({
       title={t("printingPicker.title")}
       subtitle={cardName}
       onClose={onClose}
+      returnFocusRef={returnFocusRef}
       maxWidthClassName="max-w-4xl"
       bodyClassName="overflow-y-auto p-4 sm:p-6"
     >

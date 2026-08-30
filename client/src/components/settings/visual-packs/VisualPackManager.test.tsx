@@ -47,8 +47,12 @@ const STORAGE = {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 /**
@@ -158,6 +162,73 @@ describe("VisualPackManager initialization", () => {
     view.unmount();
     expect(progressUnlisten).toHaveBeenCalledTimes(1);
     expect(revisionUnlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores a removal confirmation to its pointer launcher", async () => {
+    const fixture = backend();
+    platform.load.mockResolvedValue(fixture.value);
+    render(<VisualPackManager />);
+    const prior = await screen.findByRole("button", { name: /verify metadata/i });
+    const trigger = screen.getByRole("button", {
+      name: /remove all offline visuals/i,
+    });
+
+    prior.focus();
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole("alertdialog");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(trigger).toHaveFocus();
+  });
+
+  it("keeps the causal removal launcher across an asynchronous conflict", async () => {
+    const fixture = backend();
+    const pending = deferred<Awaited<ReturnType<VisualPackBackend["remove"]>>>();
+    vi.mocked(fixture.value.remove).mockReturnValue(pending.promise);
+    platform.load.mockResolvedValue(fixture.value);
+    render(<VisualPackManager />);
+    await screen.findByText(/Offline card images/i);
+    fireEvent.click(screen.getByRole("checkbox"));
+    const trigger = screen.getByRole("button", { name: /remove selected/i });
+
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("button", { name: /verify metadata/i }));
+    pending.reject(new VisualPackBackendError("conflict"));
+    const dialog = await screen.findByRole("alertdialog");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(trigger).toHaveFocus();
+  });
+
+  it("hands confirmed removal focus to the durable section heading", async () => {
+    const fixture = backend();
+    platform.load.mockResolvedValue(fixture.value);
+    render(<VisualPackManager />);
+    const trigger = await screen.findByRole("button", {
+      name: /remove all offline visuals/i,
+    });
+    const heading = screen.getByRole("heading", { name: /offline card images/i });
+
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(fixture.value.remove).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(heading).toHaveFocus();
   });
 
   it("disposes a progress listener whose promise resolves after unmount", async () => {

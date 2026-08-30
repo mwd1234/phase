@@ -1,4 +1,5 @@
 import type { TFunction } from "i18next";
+import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import type {
@@ -70,6 +71,8 @@ function confirmationKeys(confirmation: FrozenConfirmation): { title: string; me
 export function VisualPackManager() {
   const { t, i18n } = useTranslation("settings");
   const manager = useVisualPackManager();
+  const confirmationLauncherRef = useRef<HTMLButtonElement>(null);
+  const durableFocusRef = useRef<HTMLHeadingElement>(null);
   const confirmationCopy = manager.confirmation ? confirmationKeys(manager.confirmation) : null;
   const refusal = manager.actionErrorRefusal;
   // One message for both places the panel reports a failed action. The figures
@@ -87,7 +90,11 @@ export function VisualPackManager() {
   return (
     <section className="rounded-[20px] border border-white/10 bg-black/18 p-4 shadow-[0_18px_54px_rgba(0,0,0,0.18)] backdrop-blur-md sm:p-5">
       <div className="mb-4">
-        <h3 className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-500">
+        <h3
+          ref={durableFocusRef}
+          tabIndex={-1}
+          className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-slate-500"
+        >
           {t("visualPacks.title")}
         </h3>
         <p className="mt-2 text-xs leading-relaxed text-slate-400">{t("visualPacks.description")}</p>
@@ -166,9 +173,18 @@ export function VisualPackManager() {
               durableMutationActive={manager.durableMutationActive}
               onVerify={manager.verify}
               onRepair={manager.repair}
-              onRemoveSelected={manager.removeSelected}
-              onRemoveComplete={manager.removeComplete}
-              onRemoveAll={manager.removeAll}
+              onRemoveSelected={(ids, launcher) => {
+                confirmationLauncherRef.current = launcher;
+                manager.removeSelected(ids);
+              }}
+              onRemoveComplete={(launcher) => {
+                confirmationLauncherRef.current = launcher;
+                manager.removeComplete();
+              }}
+              onRemoveAll={(launcher) => {
+                confirmationLauncherRef.current = launcher;
+                manager.removeAll();
+              }}
             />
           </>
         )}
@@ -190,9 +206,15 @@ export function VisualPackManager() {
           ? t(confirmationCopy.message as never, { selection: selectorLabel(manager.confirmation.selector, t) })
           : ""}
         confirmLabel={confirmationCopy ? t(confirmationCopy.action as never) : ""}
-        onConfirm={manager.confirmRemoval}
+        onConfirm={() => {
+          // A successful removal may disable its launcher. Move focus to a
+          // durable section landmark before the nested scope unmounts.
+          durableFocusRef.current?.focus();
+          manager.confirmRemoval();
+        }}
         onCancel={manager.dismissConfirmation}
         tone="danger"
+        returnFocusRef={confirmationLauncherRef}
       />
     </section>
   );
