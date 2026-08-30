@@ -6,6 +6,7 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { DebugAction, DebugLibraryCardView } from "../../adapter/types";
 import { CardImage } from "../card/CardImage";
@@ -145,13 +146,15 @@ function LibraryCard({
   onOpenMenu: (launcher: HTMLButtonElement, x: number, y: number) => void;
   onMove: (zone: "Battlefield" | "Hand") => void;
 }) {
+  const { t } = useTranslation("game");
+
   return (
     <div
       className="group relative shrink-0 rounded-lg transition-transform hover:scale-[1.03] hover:ring-1 hover:ring-white/20 focus-within:ring-1 focus-within:ring-white/30"
     >
       <button
         type="button"
-        aria-label={`Open debug actions for ${card.name}`}
+        aria-label={t("debugLibrary.openActions", { name: card.name })}
         className="block cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         onClick={(event) => {
           event.stopPropagation();

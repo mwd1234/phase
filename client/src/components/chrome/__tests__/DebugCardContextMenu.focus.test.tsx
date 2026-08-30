@@ -216,6 +216,87 @@ describe("DebugCardContextMenu focus ownership", () => {
     expect(zoneTrigger).toHaveFocus();
   });
 
+  it("traverses standard, counter, edited P/T, and keyword commands within their owning menu", async () => {
+    const creature = gameObjectFactory
+      .creature(3, 4)
+      .onBattlefield()
+      .withId(7)
+      .named("Flame Jab")
+      .params({ counters: { P1P1: 2 }, keywords: ["Flying"] })
+      .build();
+    setGameStoreForTest({
+      gameState: gameStateFactory
+        .withPlayers(0, 1)
+        .withObjects(creature)
+        .build(),
+    });
+    render(<ScopedMenuHarness onParentClose={vi.fn()} />);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open debug actions for Flame Jab",
+      }),
+    );
+
+    const menu = screen.getByRole("menu", { name: "Flame Jab" });
+    const zoneTrigger = within(menu).getByRole("menuitem", {
+      name: /^Zone/,
+    });
+    const tap = within(menu).getByRole("menuitem", { name: "Tap" });
+    fireEvent.keyDown(zoneTrigger, { key: "ArrowDown" });
+    expect(tap).toHaveFocus();
+
+    const editPowerToughness = within(menu).getByRole("menuitem", {
+      name: /Set Base P\/T/,
+    });
+    fireEvent.click(editPowerToughness);
+    const powerInput = within(menu).getAllByRole("spinbutton")[0];
+    expect(powerInput).toHaveFocus();
+
+    const setPowerToughness = within(menu).getByRole("menuitem", {
+      name: "Set",
+    });
+    const removeCounter = within(menu).getByRole("menuitem", {
+      name: "P1P1: −1",
+    });
+    const addCounter = within(menu).getByRole("menuitem", {
+      name: "P1P1: +1",
+    });
+    setPowerToughness.focus();
+    fireEvent.keyDown(setPowerToughness, { key: "ArrowDown" });
+    expect(removeCounter).toHaveFocus();
+    fireEvent.keyDown(removeCounter, { key: "ArrowDown" });
+    expect(addCounter).toHaveFocus();
+
+    const keywordTrigger = within(menu).getByRole("menuitem", {
+      name: /^Keywords/,
+    });
+    fireEvent.keyDown(addCounter, { key: "ArrowDown" });
+    expect(keywordTrigger).toHaveFocus();
+
+    fireEvent.keyDown(keywordTrigger, { key: "ArrowRight" });
+    const keywordMenu = await screen.findByRole("menu", { name: /^Keywords/ });
+    const keywordCommands = within(keywordMenu).getAllByRole(
+      "menuitemcheckbox",
+    );
+    await waitFor(() => expect(keywordCommands[0]).toHaveFocus());
+    expect(keywordCommands[0]).toHaveAttribute("aria-checked", "true");
+    expect(keywordCommands[1]).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.keyDown(keywordCommands[0], { key: "ArrowDown" });
+    expect(keywordCommands[1]).toHaveFocus();
+    fireEvent.keyDown(keywordCommands[1], { key: "End" });
+    const lastKeywordCommand = keywordCommands[keywordCommands.length - 1];
+    expect(lastKeywordCommand).toHaveFocus();
+
+    fireEvent.keyDown(lastKeywordCommand, { key: "ArrowLeft" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("menu", { name: /^Keywords/ }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(keywordTrigger).toHaveFocus();
+  });
+
   it("falls back inside the parent modal when the captured trigger disconnects", async () => {
     const onParentClose = vi.fn();
     const view = render(

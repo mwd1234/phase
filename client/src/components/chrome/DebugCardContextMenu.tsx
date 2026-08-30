@@ -41,6 +41,41 @@ type SubmenuName = "zone" | "controller" | "keywords";
 // on-screen. (12rem = 192px.)
 const FLYOUT_WIDTH = 192;
 
+// A debug menu mixes traditional menu rows with compact command buttons (for
+// counters, edited P/T, and keyword toggles). Keyboard traversal must include
+// every command without crossing into an open child menu. Keeping selection in
+// one helper also makes native `disabled` and ARIA-disabled filtering uniform.
+const MENU_COMMAND_SELECTOR = [
+  "button",
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+].join(", ");
+
+function isEnabledCurrentMenuCommand(
+  command: HTMLElement,
+  menu: HTMLElement,
+): boolean {
+  return (
+    command.closest<HTMLElement>('[role="menu"]') === menu &&
+    !command.matches(':disabled, [aria-disabled="true"]')
+  );
+}
+
+function currentMenuCommands(menu: HTMLElement): HTMLElement[] {
+  return Array.from(
+    menu.querySelectorAll<HTMLElement>(MENU_COMMAND_SELECTOR),
+  ).filter((command) => isEnabledCurrentMenuCommand(command, menu));
+}
+
+function closestCurrentMenuCommand(
+  target: HTMLElement,
+  menu: HTMLElement,
+): HTMLElement | null {
+  const command = target.closest<HTMLElement>(MENU_COMMAND_SELECTOR);
+  return command && isEnabledCurrentMenuCommand(command, menu) ? command : null;
+}
+
 // Everything a submenu needs to render its toggle row and panel, except its own
 // label/badge/children. Bundled so the parent can hand it to every submenu with
 // a single spread and the accordion/positioning logic lives in one place.
@@ -156,7 +191,8 @@ function DebugCardContextMenuInner({
     // the legacy standalone game-surface behavior until it has one too, rather
     // than moving focus into a menu that can only dismiss back to <body>.
     if (anchorRef) {
-      ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+      const menu = ref.current;
+      if (menu) currentMenuCommands(menu)[0]?.focus();
     }
   }, [anchorRef]);
 
@@ -202,11 +238,7 @@ function DebugCardContextMenuInner({
       requestAnimationFrame(() => {
         const panelId = trigger.getAttribute("aria-controls");
         const panel = panelId ? document.getElementById(panelId) : null;
-        panel
-          ?.querySelector<HTMLElement>(
-            "button:not([disabled]), input:not([disabled])",
-          )
-          ?.focus();
+        if (panel) currentMenuCommands(panel)[0]?.focus();
       });
       return;
     }
@@ -246,18 +278,12 @@ function DebugCardContextMenuInner({
 
     const currentMenu = target.closest<HTMLElement>('[role="menu"]');
     if (!currentMenu || !event.currentTarget.contains(currentMenu)) return;
-    const controls = Array.from(
-      currentMenu.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-    ).filter(
-      (control) =>
-        control.closest<HTMLElement>('[role="menu"]') === currentMenu &&
-        !control.matches(':disabled, [aria-disabled="true"]'),
-    );
+    const controls = currentMenuCommands(currentMenu);
     if (controls.length === 0) return;
 
     event.preventDefault();
     event.stopPropagation();
-    const currentControl = target.closest<HTMLElement>('[role="menuitem"]');
+    const currentControl = closestCurrentMenuCommand(target, currentMenu);
     const currentIndex = currentControl ? controls.indexOf(currentControl) : -1;
     if (event.key === "Home") {
       controls[0].focus();
@@ -640,7 +666,9 @@ function CounterRow({
       <span>{label}</span>
       <div className="flex items-center gap-1">
         <button
+          role="menuitem"
           type="button"
+          aria-label={`${label}: −1`}
           onClick={() =>
             onDispatch({ type: "ModifyCounters", data: { object_id: objectId, counter_type: counterType, delta: -1 } })
           }
@@ -650,7 +678,9 @@ function CounterRow({
         </button>
         <span className="w-5 text-center font-mono text-amber-400">{current}</span>
         <button
+          role="menuitem"
           type="button"
+          aria-label={`${label}: +1`}
           onClick={() =>
             onDispatch({ type: "ModifyCounters", data: { object_id: objectId, counter_type: counterType, delta: 1 } })
           }
@@ -720,6 +750,7 @@ function PowerToughnessInput({
         }}
       />
       <button
+        role="menuitem"
         type="button"
         onClick={() => onSet(parseInt(power) || 0, parseInt(toughness) || 0)}
         className="rounded bg-cyan-800/50 px-1.5 py-0.5 text-[10px] text-cyan-300 transition-colors hover:bg-cyan-700/50"
@@ -766,7 +797,9 @@ function KeywordSubmenu({
           return (
             <button
               key={kwStr}
+              role="menuitemcheckbox"
               type="button"
+              aria-checked={hasKeyword}
               onClick={() =>
                 onDispatch(
                   hasKeyword

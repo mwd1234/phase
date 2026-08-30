@@ -1,4 +1,5 @@
 import { act } from "react";
+import i18n from "i18next";
 import {
   cleanup,
   fireEvent,
@@ -13,6 +14,7 @@ import { useGameStore } from "../../../stores/gameStore";
 import { useUiStore } from "../../../stores/uiStore";
 import { gameObjectFactory } from "../../../test/factories/gameObjectFactory";
 import { gameStateFactory } from "../../../test/factories/gameStateFactory";
+import deGame from "../../../i18n/locales/de/game.json";
 import { DebugLibraryViewer } from "../DebugLibraryViewer";
 
 const { dispatchDebug } = vi.hoisted(() => ({
@@ -78,14 +80,29 @@ describe("DebugLibraryViewer focus recovery", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
+    await i18n.changeLanguage("en");
     act(() => {
       useUiStore.setState({
         debugContextMenu: null,
         debugLibraryViewer: null,
       });
     });
+  });
+
+  it("exposes the active locale's debug-action label with the card name", async () => {
+    i18n.addResourceBundle("de", "game", deGame, true, true);
+    await act(async () => {
+      await i18n.changeLanguage("de");
+    });
+    render(<DebugLibraryViewer />);
+
+    expect(
+      screen.getByRole("button", {
+        name: "Debug-Aktionen für Flame Jab öffnen",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("recovers inside the dialog when a focused quick action is removed", async () => {

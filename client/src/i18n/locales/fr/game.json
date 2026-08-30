@@ -65,6 +65,9 @@
     "tokenToughnessPlaceholder": "Toughness",
     "sourceDefinedPtRequired": "Enter power and toughness for this source-defined token."
   },
+  "debugLibrary": {
+    "openActions": "Ouvrir les actions de débogage pour {{name}}"
+  },
   "nextUp": {
     "label": "Suivant",
     "tooltip": "Ce joueur joue le prochain tour."
