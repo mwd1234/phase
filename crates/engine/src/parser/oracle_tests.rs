@@ -3816,7 +3816,7 @@ fn free_cast_window_clause_chains_rider_and_self_exile() {
             zones,
             graveyard_replacement,
         } => {
-            assert_eq!(*count, 2);
+            assert_eq!(*count, Some(2));
             assert_eq!(*max_total_mv, Some(6));
             assert_eq!(
                 graveyard_replacement.as_ref(),
@@ -3884,7 +3884,7 @@ fn free_cast_window_parses_single_zone_non_invoke_variant() {
         );
     };
 
-    assert_eq!(*count, 1);
+    assert_eq!(*count, Some(1));
     assert_eq!(*max_total_mv, None);
     assert_eq!(
         *filter,

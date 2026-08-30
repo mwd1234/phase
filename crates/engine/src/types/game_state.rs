@@ -8814,17 +8814,24 @@ pub enum CastOfferKind {
     /// CR 608.2g + CR 601.2 + CR 118.9: Interactive free-cast window opened by
     /// `Effect::FreeCastFromZones` (Invoke Calamity). The controller repeatedly
     /// chooses one `candidate` to cast for free (or declines to finish), up to
-    /// `remaining_casts` times, while the chosen spells' running total mana
-    /// value stays within `remaining_mv_budget`. After each successful cast the
-    /// window is re-offered with `remaining_casts` decremented, the budget
-    /// reduced, and `candidates` re-filtered to those still affordable.
+    /// `remaining_casts` times — or without a cast limit at all when
+    /// `remaining_casts` is `None` (the printed "any number of spells") — while the
+    /// chosen spells' running total mana value stays within
+    /// `remaining_mv_budget`. After each successful cast the window is
+    /// re-offered with `remaining_casts` decremented (a `None` bound stays
+    /// `None`), the budget reduced, and `candidates` re-filtered to those still
+    /// affordable.
     FreeCastWindow {
         /// CR 601.2a: Instant/sorcery cards (in the controller's graveyard
         /// and/or hand) that match the effect's filter and still fit the
         /// remaining MV budget.
         candidates: Vec<ObjectId>,
-        /// CR 601.2: Casts still available in this window.
-        remaining_casts: u8,
+        /// CR 608.2c: Casts still available in this window, or `None` for the
+        /// unbounded "any number of spells" form. Same encoding as
+        /// `Effect::FreeCastFromZones::count`; the candidate list is then the
+        /// only bound, which is what the printed instruction states.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remaining_casts: Option<u8>,
         /// CR 202.3: Running-total mana-value budget remaining, or `None` for
         /// no MV cap.
         #[serde(default, skip_serializing_if = "Option::is_none")]

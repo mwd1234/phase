@@ -6282,7 +6282,7 @@ mod tests {
             player: PlayerId(0),
             kind: CastOfferKind::FreeCastWindow {
                 candidates: vec![hand_candidate],
-                remaining_casts: 2,
+                remaining_casts: Some(2),
                 remaining_mv_budget: Some(6),
                 filter: crate::types::ability::TargetFilter::Any,
                 zones: vec![Zone::Graveyard, Zone::Hand],
@@ -6308,7 +6308,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(candidates, vec![hand_candidate]);
-                assert_eq!(remaining_casts, 2);
+                assert_eq!(remaining_casts, Some(2));
                 assert_eq!(remaining_mv_budget, Some(6));
             }
             other => panic!("expected FreeCastWindow for controller, got {other:?}"),
@@ -6342,7 +6342,7 @@ mod tests {
                     "opponent must not see the controller's hand id via the member pool"
                 );
                 assert_eq!(member_pool, vec![ObjectId(0)]);
-                assert_eq!(remaining_casts, 2);
+                assert_eq!(remaining_casts, Some(2));
                 assert_eq!(remaining_mv_budget, Some(6));
                 assert_eq!(
                     graveyard_replacement.as_ref(),
