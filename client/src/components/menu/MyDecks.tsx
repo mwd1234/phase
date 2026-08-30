@@ -710,6 +710,7 @@ export function MyDecks({
   const [sortAsc, setSortAsc] = useState(mode !== "select");
   const [searchQuery, setSearchQuery] = useState("");
   const [folderPrompt, setFolderPrompt] = useState<FolderPromptRequest | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Folder/star organization (user decks only). The grouping authority +
   // mutators come from useDeckFolders; collapse state lives in preferences so
@@ -775,6 +776,9 @@ export function MyDecks({
   const confirmDeleteFolder = useCallback(() => {
     if (!folderPendingDelete) return;
     const { id } = folderPendingDelete;
+    // The folder header (including its kebab launcher) disappears on delete.
+    // Search is the nearest surviving deck control in both manage/select modes.
+    searchInputRef.current?.focus();
     deleteFolder(id);
     // Drop the now-dead id from the persisted collapse set so it can't leak.
     setCollapsedFolderIds(collapsedFolderIds.filter((existing) => existing !== id));
@@ -1590,6 +1594,7 @@ export function MyDecks({
             <path fillRule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clipRule="evenodd" />
           </svg>
           <input
+            ref={searchInputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}

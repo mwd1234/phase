@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { MyDecks } from "../MyDecks";
 import {
   RANDOM_DECK_SELECTION,
+  createFolder,
   saveDeckOrigins,
+  setDeckFolder,
   STORAGE_KEY_PREFIX,
 } from "../../../constants/storage";
 import type { ParsedDeck } from "../../../services/deckParser";
@@ -285,6 +287,41 @@ describe("MyDecks", () => {
     await user.click(screen.getByRole("option", { name: "Pioneer" }));
 
     expect(await screen.findByRole("button", { name: "Import Deck" })).toBeInTheDocument();
+  });
+
+  it("moves focus to deck search after deleting a folder in selection mode", async () => {
+    saveDeck("Filed Deck", {
+      main: [{ name: "Island", count: 60 }],
+      sideboard: [],
+    });
+    const folder = createFolder("Archive");
+    expect(folder).not.toBeNull();
+    setDeckFolder("Filed Deck", folder!.id);
+    vi.mocked(evaluateDeckCompatibilityBatch).mockResolvedValue({});
+
+    render(
+      <MyDecks
+        mode="select"
+        activeDeckName={null}
+        onSelectDeck={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Archive")).toBeInTheDocument();
+    const folderTrigger = screen.getByRole("button", { name: "Folder options" });
+    fireEvent.click(folderTrigger);
+    const deleteItem = screen.getByRole("menuitem", { name: "Delete" });
+    deleteItem.focus();
+    fireEvent.click(deleteItem);
+
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: "Delete",
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(confirmation).not.toBeInTheDocument());
+    expect(screen.queryByText("Archive")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveFocus();
   });
 
   it("uses trusted feed format metadata before background coverage filters unknown saved decks", async () => {

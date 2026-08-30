@@ -83,6 +83,7 @@ export function GameMenu({
   const [searchParams] = useSearchParams();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const cardDataMeta = useCardDataMeta();
   const isDraft = searchParams.get("source") === "draft" && !!searchParams.get("draftId");
   const isDraftPodMatch = searchParams.get("mode") === "draft-match";
@@ -100,6 +101,15 @@ export function GameMenu({
     isDraftPodMatch,
     onConcede,
   });
+
+  const openSurfaceFromMenu = (openSurface: () => void) => {
+    // The selected menu item unmounts as this dropdown closes. Move focus to
+    // its stable launcher first so the surface can capture a durable return
+    // target rather than <body> during the same React commit.
+    menuTriggerRef.current?.focus();
+    setOpen(false);
+    openSurface();
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -126,6 +136,7 @@ export function GameMenu({
     >
       <div className="flex h-9 w-9 items-center justify-center rounded-full border border-cyan-200/45 bg-slate-950/84 shadow-[0_8px_22px_rgba(0,0,0,0.32),0_0_14px_rgba(34,211,238,0.22)] backdrop-blur-md">
         <button
+          ref={menuTriggerRef}
           onClick={() => {
             setOpen(!open);
           }}
@@ -213,10 +224,7 @@ export function GameMenu({
             <MenuButton
               label={t("gameMenu.reportCard")}
               icon={<FlagIcon />}
-              onClick={() => {
-                onReportCardClick();
-                setOpen(false);
-              }}
+              onClick={() => openSurfaceFromMenu(onReportCardClick)}
             />
           )}
           {showSandboxTools && onSandboxToolsClick && (
@@ -247,18 +255,12 @@ export function GameMenu({
           <MenuButton label={t("gameMenu.resume")} onClick={() => setOpen(false)} />
           <MenuButton
             label={t("gameMenu.settings")}
-            onClick={() => {
-              setOpen(false);
-              onSettingsClick();
-            }}
+            onClick={() => openSurfaceFromMenu(onSettingsClick)}
           />
           <MenuButton
             label={t("gameMenu.helpShortcuts")}
             shortcut="?"
-            onClick={() => {
-              setOpen(false);
-              onHelpClick();
-            }}
+            onClick={() => openSurfaceFromMenu(onHelpClick)}
           />
           {isAiMode && (
             <MenuButton

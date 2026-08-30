@@ -46,8 +46,9 @@ interface PopoverMenuProps {
   /** Notified when the menu opens/closes — e.g. to dismiss a hover preview
    *  that would otherwise sit behind the portaled menu. */
   onOpenChange?: (open: boolean) => void;
-  /** Render the menu items; call `close` after an action runs. */
-  children: (close: () => void) => ReactNode;
+  /** Render the menu items; call `close` after an action runs. `focusTrigger`
+   *  provides a stable return target before an action opens another surface. */
+  children: (close: () => void, focusTrigger: () => void) => ReactNode;
 }
 
 /**
@@ -91,6 +92,9 @@ export function PopoverMenu({
     if (variant === "dialog") restoreFocusAfterCloseRef.current = true;
     changeOpen(false);
   }, [changeOpen, variant]);
+  const focusTrigger = useCallback(() => {
+    if (triggerRef.current?.isConnected) triggerRef.current.focus();
+  }, []);
   const toggle = useCallback(
     (event: MouseEvent) => {
       event.stopPropagation();
@@ -138,9 +142,9 @@ export function PopoverMenu({
     }
     if (!open && restoreFocusAfterCloseRef.current) {
       restoreFocusAfterCloseRef.current = false;
-      if (triggerRef.current?.isConnected) triggerRef.current.focus();
+      focusTrigger();
     }
-  }, [open, variant]);
+  }, [focusTrigger, open, variant]);
 
   useEffect(() => {
     if (!open) return;
@@ -152,7 +156,7 @@ export function PopoverMenu({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         close();
-        if (variant === "menu") triggerRef.current?.focus();
+        if (variant === "menu") focusTrigger();
       }
     };
     window.addEventListener("pointerdown", onPointerDown, true);
@@ -165,7 +169,7 @@ export function PopoverMenu({
       window.removeEventListener("resize", position);
       window.removeEventListener("scroll", position, true);
     };
-  }, [open, close, position, variant]);
+  }, [open, close, focusTrigger, position, variant]);
 
   return (
     <>
@@ -216,7 +220,7 @@ export function PopoverMenu({
             }}
             className="fixed z-[120] flex flex-col overflow-y-auto overscroll-contain rounded-xl border border-white/10 bg-[#0a0f1b]/98 py-1 shadow-xl backdrop-blur-md thin-scrollbar"
           >
-            {children(close)}
+            {children(close, focusTrigger)}
           </div>,
           document.body,
         )}

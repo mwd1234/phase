@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 
 import { PopoverMenu } from "../PopoverMenu.tsx";
+import { FolderActionsMenu } from "../FolderActionsMenu.tsx";
+import { ConfirmDialog } from "../../ui/ConfirmDialog.tsx";
 
 afterEach(() => {
   cleanup();
@@ -97,6 +100,47 @@ describe("PopoverMenu", () => {
     expect(ancestorPointerDown).not.toHaveBeenCalled();
     expect(ancestorClick).not.toHaveBeenCalled();
     expect(screen.queryByRole("menuitem", { name: "Do the thing" })).not.toBeInTheDocument();
+  });
+
+  it("preserves the folder trigger across a transient item and confirmation", async () => {
+    function FolderDeleteHarness() {
+      const [confirmOpen, setConfirmOpen] = useState(false);
+      return (
+        <>
+          <FolderActionsMenu
+            onRename={vi.fn()}
+            onDelete={() => setConfirmOpen(true)}
+          />
+          <ConfirmDialog
+            open={confirmOpen}
+            title="Delete folder?"
+            message="The decks will remain available."
+            confirmLabel="Delete"
+            onConfirm={vi.fn()}
+            onCancel={() => setConfirmOpen(false)}
+          />
+        </>
+      );
+    }
+
+    render(<FolderDeleteHarness />);
+    const trigger = screen.getByRole("button", { name: "Folder options" });
+    fireEvent.click(trigger);
+    const deleteItem = screen.getByRole("menuitem", { name: "Delete" });
+    deleteItem.focus();
+    fireEvent.click(deleteItem);
+
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Delete folder?",
+    });
+    const cancel = within(confirmation).getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    fireEvent.keyDown(cancel, { key: "Escape" });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog", { name: "Delete folder?" })).not.toBeInTheDocument(),
+    );
+    expect(trigger).toHaveFocus();
   });
 
   it("clamps_an_oversized_menu_to_viewport_edges_before_positioning_it", () => {

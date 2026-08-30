@@ -1,8 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GameMenu } from "../GameMenu";
+import { ModalPanelShell } from "../../ui/ModalPanelShell";
 
 vi.mock("../../../hooks/useCardDataMeta.ts", () => ({
   useCardDataMeta: () => null,
@@ -106,6 +108,71 @@ describe("GameMenu", () => {
 
     expect(onSandboxToolsClick).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Open Sandbox Tools" })).not.toBeInTheDocument();
+  });
+
+  it("restores the hamburger after Settings replaces its transient menu item", async () => {
+    function SettingsHarness() {
+      const [settingsOpen, setSettingsOpen] = useState(false);
+      return (
+        <MemoryRouter initialEntries={["/game/test-game"]}>
+          <GameMenu
+            gameId="test-game"
+            isAiMode={false}
+            isOnlineMode={false}
+            showAiHand={false}
+            onToggleAiHand={vi.fn()}
+            onSettingsClick={() => setSettingsOpen(true)}
+            onHelpClick={vi.fn()}
+          />
+          <ModalPanelShell
+            open={settingsOpen}
+            title="Settings"
+            onClose={() => setSettingsOpen(false)}
+          >
+            <button type="button">Save settings</button>
+          </ModalPanelShell>
+        </MemoryRouter>
+      );
+    }
+
+    render(<SettingsHarness />);
+    const trigger = screen.getByRole("button", { name: "Game menu" });
+    fireEvent.click(trigger);
+    const settingsItem = screen.getByRole("button", { name: "Settings" });
+    settingsItem.focus();
+    fireEvent.click(settingsItem);
+
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    await waitFor(() => expect(dialog).toHaveFocus());
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument(),
+    );
+    expect(trigger).toHaveFocus();
+  });
+
+  it("moves focus to the hamburger before opening menu-owned surfaces", () => {
+    const onReportCardClick = vi.fn();
+    const onHelpClick = vi.fn();
+    renderGameMenu({ showReportCard: true, onReportCardClick, onHelpClick });
+
+    const trigger = screen.getByRole("button", { name: "Game menu" });
+    fireEvent.click(trigger);
+    const reportItem = screen.getByRole("button", { name: "Report a card" });
+    reportItem.focus();
+    fireEvent.click(reportItem);
+
+    expect(onReportCardClick).toHaveBeenCalledOnce();
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger);
+    const helpItem = screen.getByRole("button", { name: "Help & Shortcuts ?" });
+    helpItem.focus();
+    fireEvent.click(helpItem);
+
+    expect(onHelpClick).toHaveBeenCalledOnce();
+    expect(trigger).toHaveFocus();
   });
 
   it("toggles the floating click mode button from the collapsed menu", () => {

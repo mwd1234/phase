@@ -2,6 +2,8 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { useFocusScopePortalBranch } from "./FocusScope";
+
 const MENU_GAP_PX = 4;
 const MENU_VIEWPORT_PADDING_PX = 8;
 const MENU_MAX_HEIGHT_PX = 280;
@@ -225,6 +227,7 @@ export function MenuSelect({
   const [filterText, setFilterText] = useState("");
   const [minWidthPx, setMinWidthPx] = useState<number | undefined>(undefined);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const portalOwnerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLSpanElement>(null);
   const filterInputRef = useRef<HTMLInputElement>(null);
@@ -312,6 +315,14 @@ export function MenuSelect({
     setOpen(true);
   }, [closeMenu, disabled, open, useBottomSheet]);
 
+  useFocusScopePortalBranch({
+    active: open,
+    containerRef: menuRef,
+    ownerRef: portalOwnerRef,
+    anchorRef: triggerRef,
+    onDismiss: closeMenu,
+  });
+
   useLayoutEffect(() => {
     if (!open) return;
     updatePosition();
@@ -341,6 +352,7 @@ export function MenuSelect({
       closeMenu();
     };
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === "Escape") {
         closeMenu();
         triggerRef.current?.focus();
@@ -452,7 +464,7 @@ export function MenuSelect({
 
       {open &&
         createPortal(
-          <>
+          <div ref={portalOwnerRef} className="contents">
             {useBottomSheet && (
               <button
                 type="button"
@@ -518,7 +530,7 @@ export function MenuSelect({
                 </div>
               )}
             </div>
-          </>,
+          </div>,
           document.body,
         )}
     </div>
