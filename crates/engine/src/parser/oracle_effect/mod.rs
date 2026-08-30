@@ -33957,8 +33957,51 @@ pub(crate) fn parse_effect_chain_ir(
             condition.as_ref().is_some_and(condition_refs_source_object) && !prior_typed_referent;
         let chunk_subject = if binds_source_counter_pronoun {
             Some(TargetFilter::SelfRef)
+        } else if let Some(anchor) = if_you_do_anchor.clone() {
+            Some(anchor)
+        } else if prior_typed_referent
+            && matches!(
+                ctx.subject,
+                None | Some(TargetFilter::SelfRef | TargetFilter::Any)
+            )
+            // CR 608.2c + CR 613.4b: constrain this rebind to the bare
+            // possessive-pronoun base-P/T-set grammar it exists for. Without
+            // this gate, the rebind fires for EVERY chunk shape whose subject
+            // is a bare "it"/"its" following a prior typed referent — a much
+            // broader claim than Galion's own clause needs, and one with no
+            // per-class proof that reassigning the subject of e.g. a later
+            // `DealDamage`/`CantUntap`/`Discard`/`GiveControl`/`Shuffle` chunk
+            // to the sibling's target (instead of the trigger's watched
+            // source) is rules-correct for those unrelated classes. Restrict
+            // the antecedent-precedence override to the one clause shape this
+            // PR actually introduced coverage for.
+            && subject::is_bare_pronoun_base_pt_possessive_clause(&text)
+        {
+            // CR 608.2c: an earlier SIBLING clause in THIS chain
+            // (not merely the enclosing trigger condition) chose a genuinely
+            // new typed object referent (`prior_typed_referent`) — that is a
+            // CLOSER antecedent than the trigger's own passive "self-watching"
+            // default subject, so a later bare "it"/"its" must bind to it
+            // instead of re-binding to the trigger's watched object. Clearing
+            // `chunk_subject` to `None` here (rather than special-casing
+            // `TargetFilter` in `parse_subject_application`) lets that
+            // function's existing `ctx.subject.is_none() && parent_target_available`
+            // check route to `ParentTarget` unchanged — Galion, Elvenking's
+            // Butler: "Whenever ~ attacks, choose up to one other target
+            // creature you control. Its base power and toughness become equal
+            // to ~'s power and toughness". Gated on `ctx.subject` being only
+            // the generic default (not a real typed trigger subject, which
+            // stays authoritative), on `if_you_do_anchor` being
+            // absent (an "if you do" anchor to the source, as in The
+            // Irencrag's "you may have ~ become ... . If you do, it gains
+            // ...", is itself the correct nearest antecedent and must not be
+            // overridden), and on the chunk text itself being the bare
+            // possessive-pronoun base-P/T-set clause shape (see
+            // `is_bare_pronoun_base_pt_possessive_clause`) so unrelated chunk
+            // shapes never have their subject silently reassigned.
+            None
         } else {
-            if_you_do_anchor.clone().or_else(|| ctx.subject.clone())
+            ctx.subject.clone()
         };
         // CR 608.2c: `ctx.parent_target_available` carries an enclosing chain's
         // referent into a nested chain — an `Otherwise` else-branch is parsed by a
