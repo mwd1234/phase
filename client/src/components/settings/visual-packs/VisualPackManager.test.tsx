@@ -212,6 +212,34 @@ describe("VisualPackManager initialization", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("moves direct selected-removal focus before its launcher disables", async () => {
+    const fixture = backend();
+    const pending = deferred<Awaited<ReturnType<VisualPackBackend["remove"]>>>();
+    vi.mocked(fixture.value.remove).mockReturnValue(pending.promise);
+    platform.load.mockResolvedValue(fixture.value);
+    render(<VisualPackManager />);
+    const heading = await screen.findByRole("heading", {
+      name: /offline card images/i,
+    });
+    fireEvent.click(screen.getByRole("checkbox"));
+    const trigger = screen.getByRole("button", { name: /remove selected/i });
+    trigger.focus();
+
+    fireEvent.click(trigger);
+
+    await waitFor(() => expect(fixture.value.remove).toHaveBeenCalledOnce());
+    expect(trigger).toBeDisabled();
+    expect(heading).toHaveFocus();
+    expect(document.body).not.toHaveFocus();
+
+    pending.resolve({
+      removed: [],
+      revision: installedRevision("90071992547409931"),
+      cleanupIssues: [],
+    });
+    await waitFor(() => expect(trigger).toBeEnabled());
+  });
+
   it("hands confirmed removal focus to the durable section heading", async () => {
     const fixture = backend();
     platform.load.mockResolvedValue(fixture.value);

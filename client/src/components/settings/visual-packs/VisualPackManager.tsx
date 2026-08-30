@@ -175,6 +175,11 @@ export function VisualPackManager() {
               onRepair={manager.repair}
               onRemoveSelected={(ids, launcher) => {
                 confirmationLauncherRef.current = launcher;
+                // Non-cascading selections remove immediately. Move focus off
+                // the launcher before that asynchronous mutation disables it;
+                // a cascade confirmation still restores to the explicit
+                // launcher when cancelled.
+                durableFocusRef.current?.focus();
                 manager.removeSelected(ids);
               }}
               onRemoveComplete={(launcher) => {

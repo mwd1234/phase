@@ -10,6 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useUiStore } from "../../../stores/uiStore";
+import { useGameStore } from "../../../stores/gameStore";
 import { gameObjectFactory } from "../../../test/factories/gameObjectFactory";
 import { gameStateFactory } from "../../../test/factories/gameStateFactory";
 import { setGameStoreForTest } from "../../../test/helpers/gameStoreHelpers";
@@ -113,6 +114,7 @@ describe("DebugCardContextMenu focus ownership", () => {
     expect(menus).toHaveLength(1);
     const menu = menus[0];
     expect(parentDialog).not.toContainElement(menu);
+    expect(menu).toHaveAccessibleName("Flame Jab");
 
     const firstMenuItem = within(menu).getAllByRole("menuitem")[0];
     expect(firstMenuItem).toHaveFocus();
@@ -123,6 +125,46 @@ describe("DebugCardContextMenu focus ownership", () => {
     expect(parentDialog).toBeInTheDocument();
     expect(onParentClose).not.toHaveBeenCalled();
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("closes and stays in its parent scope when an async action removes the object", async () => {
+    let resolveDispatch!: (events: never[]) => void;
+    dispatchDebug.mockImplementationOnce(
+      () =>
+        new Promise<never[]>((resolve) => {
+          resolveDispatch = resolve;
+        }),
+    );
+    render(<ScopedMenuHarness onParentClose={vi.fn()} />);
+    const parentDialog = screen.getByRole("dialog", { name: "Graveyard" });
+    const trigger = screen.getByRole("button", {
+      name: "Open debug actions for Flame Jab",
+    });
+    fireEvent.click(trigger);
+    const menu = screen.getByRole("menu", { name: "Flame Jab" });
+    const remove = within(menu).getByRole("menuitem", { name: "Remove" });
+    fireEvent.click(remove);
+    expect(dispatchDebug).toHaveBeenCalledWith({
+      type: "Debug",
+      data: { type: "RemoveObject", data: { object_id: 7 } },
+    });
+
+    const current = useGameStore.getState().gameState!;
+    act(() => {
+      useGameStore.setState({
+        gameState: { ...current, objects: {} },
+      });
+    });
+
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(useUiStore.getState().debugContextMenu).toBeNull();
+    await waitFor(() => expect(parentDialog).toHaveFocus());
+    expect(document.body).not.toHaveFocus();
+
+    await act(async () => {
+      resolveDispatch([]);
+      await Promise.resolve();
+    });
   });
 
   it("reaches every menu level with arrow, Home, and End keys", async () => {

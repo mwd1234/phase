@@ -125,19 +125,31 @@ function DebugCardContextMenuInner({
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const fallbackAnchorRef = useRef<HTMLElement | null>(null);
-  const obj = useGameStore((s) => s.gameState?.objects[objectId]);
+  const liveObject = useGameStore((s) => s.gameState?.objects[objectId]);
+  const retainedObjectRef = useRef(liveObject);
+  if (liveObject) retainedObjectRef.current = liveObject;
+  const obj = liveObject ?? retainedObjectRef.current;
   const players = useGameStore((s) => s.gameState?.players);
   const dispatch = useGameDispatch();
   const isMobile = useIsMobile();
+  const headerId = useId();
   // Accordion: at most one submenu open at a time. Opening another collapses it.
   const [openSubmenu, setOpenSubmenu] = useState<SubmenuName | null>(null);
 
   useFocusScopePortalBranch({
-    active: true,
+    active: Boolean(obj),
     containerRef: ref,
     anchorRef: anchorRef ?? fallbackAnchorRef,
     onDismiss: onClose,
   });
+
+  useLayoutEffect(() => {
+    // An engine/debug snapshot can remove this object before an async action's
+    // dispatch promise settles. Retain the last render through this layout
+    // handoff so the portal unregisters while its focused owner and exact
+    // anchor are both still available, then let the store close unmount it.
+    if (!liveObject) onClose();
+  }, [liveObject, onClose]);
 
   useLayoutEffect(() => {
     // Scoped modal launchers provide an exact restoration authority. Preserve
@@ -298,6 +310,7 @@ function DebugCardContextMenuInner({
     <div
       ref={ref}
       role="menu"
+      aria-labelledby={headerId}
       className={
         "fixed z-[120] w-56 rounded-lg border border-gray-700 bg-gray-900/95 py-1 shadow-xl backdrop-blur-sm " +
         // Mobile expands submenus inline, so the menu can grow tall and needs to
@@ -316,7 +329,10 @@ function DebugCardContextMenuInner({
       onKeyDown={handleMenuKeyDown}
     >
       {/* Card name header */}
-      <div className="truncate border-b border-gray-800 px-3 py-1.5 font-mono text-xs font-semibold text-gray-300">
+      <div
+        id={headerId}
+        className="truncate border-b border-gray-800 px-3 py-1.5 font-mono text-xs font-semibold text-gray-300"
+      >
         {obj.name || `Object ${objectId}`}
         {obj.class_level != null && (
           <span className="ml-1 text-amber-400">Lv.{obj.class_level}</span>
