@@ -21,7 +21,13 @@ vi.mock("../../services/draftPersistence", () => ({
 }));
 
 import { P2PDraftHost } from "../p2p-draft-host";
-import { DRAFT_PROTOCOL_VERSION, type DraftMatchBinding, type DraftP2PMessage } from "../../network/draftProtocol";
+import type { DraftPlayerView } from "../draft-adapter";
+import {
+  DRAFT_PROTOCOL_VERSION, DraftPauseReason, decodeDraftWireMessage, encodeDraftWireMessage,
+  type DraftMatchBinding, type DraftP2PMessage,
+} from "../../network/draftProtocol";
+import type { DraftPeerSession } from "../../network/draftPeerSession";
+import { FakeDraftDataConnection } from "../../network/__tests__/fakeDraftDataConnection";
 
 type PersistenceHost = {
   adapter: { exportSession: () => Promise<string> };
@@ -690,6 +696,150 @@ describe("P2PDraftHost persistence disposal", () => {
     expect(privateHost.seatTokens.has(1)).toBe(false);
     expect(privateHost.seatNames.has(1)).toBe(false);
   });
+
+  it.each(["lobby", "started draft"] as const)(
+    "publishes a durable %s leave when the departing connection closes before its acknowledgement",
+    async (phase) => {
+      vi.useFakeTimers();
+      let acceptConnection!: Parameters<ConstructorParameters<typeof P2PDraftHost>[1]>[0];
+      const host = new P2PDraftHost(
+        { id: "host" } as never,
+        (handler) => { acceptConnection = handler; return () => {}; },
+        { type: "Set", data: { pools: [{ code: "TST" }], sequence: ["TST"] } } as never,
+        "Premier", 3, "Host", "Swiss", "Competitive", undefined, "shared-recovery", "ABCDE",
+      );
+      const privateHost = host as unknown as {
+        adapter: {
+          draftProcedure: ReturnType<typeof vi.fn>;
+          createMultiplayerDraft: ReturnType<typeof vi.fn>;
+          setSeatConnected: ReturnType<typeof vi.fn>;
+          getViewForSeat: ReturnType<typeof vi.fn>;
+          exportSession: ReturnType<typeof vi.fn>;
+        };
+        guestSessions: Map<number, DraftPeerSession>;
+        mutationQueue: Promise<void>;
+        persistQueue: Promise<void>;
+        timerContext: string | null;
+        timerInterval: ReturnType<typeof setInterval> | null;
+        frozenTimer: { context: string; remainingMs: number } | null;
+        paused: boolean;
+      };
+      let draftView: DraftPlayerView;
+      privateHost.adapter.draftProcedure = vi.fn(async () => ({
+        packs_per_player: 3, min_deck_size: 40, launch_capability: "None",
+        pick_selection_mode: "Direct", match_config: { match_type: "Bo1" },
+      }));
+      privateHost.adapter.createMultiplayerDraft = vi.fn(async () => {});
+      privateHost.adapter.setSeatConnected = vi.fn(async () => {});
+      privateHost.adapter.getViewForSeat = vi.fn(async () => draftView);
+      privateHost.adapter.exportSession = vi.fn(async () => JSON.stringify(draftView));
+      const departing = new FakeDraftDataConnection();
+      const remaining = new FakeDraftDataConnection();
+      const events = vi.fn();
+      host.onEvent(events);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      let finishSave: (() => void) | undefined;
+      try {
+        await host.initialize();
+        await privateHost.persistQueue;
+        for (const [connection, displayName] of [[departing, "Alice"], [remaining, "Bea"]] as const) {
+          acceptConnection(connection as never);
+          await connection.receiveRaw(await encodeDraftWireMessage({
+            type: "draft_join", draftProtocolVersion: DRAFT_PROTOCOL_VERSION, displayName,
+          }));
+          await privateHost.mutationQueue;
+        }
+        const welcome = (await Promise.all(departing.sentRaw.map(decodeDraftWireMessage)))
+          .find((message) => message.type === "draft_welcome");
+        if (!welcome || welcome.type !== "draft_welcome") throw new Error("Guest was not admitted");
+        expect(welcome.seatIndex).toBe(1);
+        expect(events).toHaveBeenCalledWith({ type: "seatJoined", seatIndex: 2, displayName: "Bea" });
+        const session = privateHost.guestSessions.get(1);
+        if (!session) throw new Error("Admitted guest has no session");
+        const close = vi.spyOn(session, "close");
+
+        if (phase === "started draft") {
+          draftView = { ...await host.getHostView(), status: "Drafting" };
+          await host.startDraft(false);
+          expect(privateHost.adapter.createMultiplayerDraft).toHaveBeenCalledOnce();
+          expect(privateHost.timerContext).toBe("pick");
+          expect(privateHost.timerInterval).not.toBeNull();
+          expect(privateHost.paused).toBe(false);
+        }
+        await vi.waitFor(async () => {
+          const messages = await Promise.all(remaining.sentRaw.map(decodeDraftWireMessage));
+          expect(messages).toContainEqual(expect.objectContaining(phase === "lobby"
+            ? { type: "draft_lobby_update", joined: 3 }
+            : { type: "draft_state_update", view: draftView }));
+        });
+        remaining.sentRaw.length = 0;
+        events.mockClear();
+
+        let snapshot: unknown;
+        let saving!: () => void;
+        const saveStarted = new Promise<void>((resolve) => { saving = resolve; });
+        const saveGate = new Promise<void>((resolve) => { finishSave = resolve; });
+        const committed = vi.fn();
+        saveDraftHostSession.mockImplementationOnce(async (_id, saved) => {
+          snapshot = saved;
+          saving();
+          await saveGate;
+          committed();
+        });
+        await departing.receiveRaw(await encodeDraftWireMessage({
+          type: "draft_leave", draftProtocolVersion: DRAFT_PROTOCOL_VERSION, draftToken: welcome.draftToken,
+        }));
+        await saveStarted;
+        expect(privateHost.guestSessions.has(1)).toBe(false);
+        expect(snapshot).toEqual(expect.objectContaining({
+          seatTokens: { 2: expect.any(String) },
+          kickedTokens: phase === "lobby" ? [] : [welcome.draftToken],
+          expiredDisconnectedSeats: phase === "lobby" ? [] : [1],
+        }));
+        expect(committed).not.toHaveBeenCalled();
+        expect(close).not.toHaveBeenCalled();
+        departing.simulateClose();
+        expect(departing.open).toBe(false);
+        if (!finishSave) throw new Error("Persistence gate was not initialized");
+        finishSave();
+        await privateHost.mutationQueue;
+
+        expect(committed).toHaveBeenCalledOnce();
+        expect(close).toHaveBeenCalledExactlyOnceWith("Participant left draft");
+        expect(warn).toHaveBeenCalledWith(
+          "[P2PDraftHost] leave acknowledgement failed:", new Error("Draft connection is not open"),
+        );
+        expect(committed).toHaveBeenCalledBefore(close);
+        expect(events).toHaveBeenCalledWith({ type: "seatDisconnected", seatIndex: 1 });
+        expect(error).not.toHaveBeenCalled();
+        await vi.waitFor(async () => {
+          const messages = await Promise.all(remaining.sentRaw.map(decodeDraftWireMessage));
+          if (phase === "lobby") {
+            expect(messages).toContainEqual(expect.objectContaining({ type: "draft_lobby_update", joined: 2 }));
+            expect(events).toHaveBeenCalledWith({ type: "lobbyUpdate", seats: expect.any(Array), joined: 2, total: 3 });
+            expect((await host.getHostView()).seats[1]?.display_name).not.toBe("Alice");
+          } else {
+            expect(messages).toContainEqual({ type: "draft_state_update", view: draftView });
+            expect(messages).toContainEqual({ type: "draft_paused", reason: DraftPauseReason.PlayerDisconnected });
+            expect(events).toHaveBeenCalledWith({ type: "draftPaused", reason: DraftPauseReason.PlayerDisconnected });
+            expect(privateHost.adapter.setSeatConnected).toHaveBeenCalledExactlyOnceWith(1, false);
+            expect(privateHost.paused).toBe(true);
+            expect(privateHost.timerInterval).toBeNull();
+            expect(privateHost.timerContext).toBeNull();
+            expect(privateHost.frozenTimer).toEqual(expect.objectContaining({ context: "pick", remainingMs: expect.any(Number) }));
+            expect(privateHost.frozenTimer!.remainingMs).toBeGreaterThan(0);
+          }
+        });
+      } finally {
+        finishSave?.();
+        await host.dispose();
+        warn.mockRestore();
+        error.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("restores a leave's live recovery state when its durability fence fails", async () => {
     const host = recoveredHost("Host");

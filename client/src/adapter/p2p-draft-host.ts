@@ -1521,11 +1521,17 @@ export class P2PDraftHost {
     } finally {
       stopWatchingSession();
     }
-    await session.send({
-      type: "draft_leave_ack",
-      draftProtocolVersion: DRAFT_PROTOCOL_VERSION,
-      draftToken,
-    });
+    try {
+      await session.send({
+        type: "draft_leave_ack",
+        draftProtocolVersion: DRAFT_PROTOCOL_VERSION,
+        draftToken,
+      });
+    } catch (error) {
+      // The leave is already durable. A failed notification cannot skip
+      // terminal cleanup or hide the departure from the remaining seats.
+      console.warn("[P2PDraftHost] leave acknowledgement failed:", error);
+    }
     session.close("Participant left draft");
 
     if (this.draftStarted) {
