@@ -224,7 +224,7 @@ export class P2PDraftGuest {
     session.onMessage((msg) => {
       // A timed-out or superseded connection must never promote a later
       // reconnect attempt with its delayed acknowledgement.
-      if (this.session === session) void this.handleHostMessage(msg, session);
+      if (this.session === session) return this.handleHostMessage(msg, session);
     });
     return session;
   }
@@ -495,6 +495,8 @@ export class P2PDraftGuest {
           break;
         }
 
+        // Persistence can outlive a disconnected or retired handshake.
+        if (this.session !== session) return;
         this.resolveHandshake(session);
         this.emit({ type: "workspaceRestored", workspaceState: msg.workspaceState });
         this.emit({ type: "joined", seatIndex: msg.seatIndex, draftCode: msg.draftCode });
@@ -522,6 +524,7 @@ export class P2PDraftGuest {
           }
         }
 
+        if (this.session !== session) return;
         this.resolveHandshake(session);
         this.emit({ type: "workspaceRestored", workspaceState: msg.workspaceState });
         this.emit({ type: "reconnected", seatIndex: msg.seatIndex });
@@ -568,6 +571,9 @@ export class P2PDraftGuest {
         this.currentView = msg.view;
         await clearDraftDeckSubmission(this.hostPeerId, msg.submissionId);
         this.deckSubmissionWaiters.get(msg.submissionId)?.resolve();
+        // The durable receipt settles its caller even if the session closed,
+        // but its old view must not be published into a reconnect attempt.
+        if (this.session !== session) return;
         this.emit({ type: "deckSubmissionAcknowledged", submissionId: msg.submissionId, view: msg.view });
         this.emit({ type: "viewUpdated", view: msg.view });
         break;
