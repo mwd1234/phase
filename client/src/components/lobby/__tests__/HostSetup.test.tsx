@@ -158,6 +158,29 @@ describe("HostSetup", () => {
       }
     });
 
+    it("keeps the compact track inside a non-shrinking touch target", async () => {
+      const user = userEvent.setup();
+      const onHost = vi.fn();
+      render(<HostSetup onHost={onHost} onBack={vi.fn()} connectionMode={connectionMode} />);
+
+      for (const control of screen.getAllByRole("switch")) {
+        // Happy DOM does not lay out CSS. Pin the sizing contract here; check
+        // rendered dimensions and clicks outside the track in a real browser.
+        expect(control).toHaveClass("min-h-11", "min-w-11", "shrink-0");
+        const track = control.firstElementChild;
+        expect(track).toHaveAttribute("aria-hidden", "true");
+        expect(track).toHaveClass("h-6", "w-[42px]");
+        if (!track) throw new Error("Switch track is missing");
+
+        const wasChecked = control.getAttribute("aria-checked");
+        await user.click(control);
+        expect(control).toHaveAttribute("aria-checked", wasChecked === "true" ? "false" : "true");
+        await user.click(track);
+        expect(control).toHaveAttribute("aria-checked", wasChecked);
+      }
+      expect(onHost).not.toHaveBeenCalled();
+    });
+
     it("supports native Space and Enter without submitting until Host is activated", async () => {
       const user = userEvent.setup();
       const onHost = vi.fn();

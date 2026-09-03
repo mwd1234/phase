@@ -133,9 +133,11 @@ function Toggle({
       aria-describedby={describedBy}
       aria-checked={on}
       onClick={() => onChange(!on)}
-      className={`flex h-6 w-[42px] shrink-0 items-center rounded-full p-0.5 transition-colors ${on ? onBg : "bg-white/12"}`}
+      className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full"
     >
-      <span className={`h-5 w-5 rounded-full transition-transform duration-150 ${knob} ${on ? "translate-x-[18px]" : ""}`} />
+      <span aria-hidden="true" className={`flex h-6 w-[42px] items-center rounded-full p-0.5 transition-colors ${on ? onBg : "bg-white/12"}`}>
+        <span className={`h-5 w-5 rounded-full transition-transform duration-150 ${knob} ${on ? "translate-x-[18px]" : ""}`} />
+      </span>
     </button>
   );
 }
