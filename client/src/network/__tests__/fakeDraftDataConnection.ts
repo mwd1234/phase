@@ -1,5 +1,5 @@
 type DataHandler = (data: unknown) => void | Promise<void>;
-type CloseHandler = () => void;
+type LifecycleHandler = () => void;
 type ErrorHandler = (error: Error) => void;
 
 /** Raw-byte PeerJS fake shared by draft session and adapter regressions. */
@@ -7,7 +7,8 @@ export class FakeDraftDataConnection {
   open = true;
   readonly sentRaw: Uint8Array[] = [];
   private readonly dataHandlers = new Set<DataHandler>();
-  private readonly closeHandlers = new Set<CloseHandler>();
+  private readonly openHandlers = new Set<LifecycleHandler>();
+  private readonly closeHandlers = new Set<LifecycleHandler>();
   private readonly errorHandlers = new Set<ErrorHandler>();
 
   send(bytes: Uint8Array): void {
@@ -16,11 +17,12 @@ export class FakeDraftDataConnection {
   }
 
   on(event: "data", handler: DataHandler): this;
-  on(event: "close", handler: CloseHandler): this;
+  on(event: "open" | "close", handler: LifecycleHandler): this;
   on(event: "error", handler: ErrorHandler): this;
-  on(event: string, handler: DataHandler | CloseHandler | ErrorHandler): this {
+  on(event: string, handler: DataHandler | LifecycleHandler | ErrorHandler): this {
     if (event === "data") this.dataHandlers.add(handler as DataHandler);
-    else if (event === "close") this.closeHandlers.add(handler as CloseHandler);
+    else if (event === "open") this.openHandlers.add(handler as LifecycleHandler);
+    else if (event === "close") this.closeHandlers.add(handler as LifecycleHandler);
     else if (event === "error") this.errorHandlers.add(handler as ErrorHandler);
     return this;
   }
@@ -32,6 +34,11 @@ export class FakeDraftDataConnection {
 
   close(): void {
     this.simulateClose();
+  }
+
+  simulateOpen(): void {
+    this.open = true;
+    for (const handler of this.openHandlers) handler();
   }
 
   simulateClose(): void {

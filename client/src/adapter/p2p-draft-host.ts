@@ -1945,7 +1945,13 @@ export class P2PDraftHost {
       revision: receipt.revision,
     };
     if (seat === 0) return;
-    await this.guestSessions.get(seat)?.send(message);
+    try {
+      await this.guestSessions.get(seat)?.send(message);
+    } catch (error) {
+      // The receipt is already durable; an exact retry can acknowledge it
+      // without applying the result to the reducer again.
+      console.warn("[P2PDraftHost] settlement acknowledgement failed:", error);
+    }
   }
 
   /**
@@ -3068,7 +3074,13 @@ export class P2PDraftHost {
     // Fence queued non-terminal saves before awaiting guest notifications.
     this.persistenceClosed = true;
     for (const session of this.guestSessions.values()) {
-      await session.send({ type: "draft_host_left", reason: "Host left the draft" });
+      try {
+        await session.send({ type: "draft_host_left", reason: "Host left the draft" });
+      } catch (error) {
+        // A disconnected guest cannot prevent notification of the remaining
+        // guests or the terminal cleanup of the host's durable session.
+        console.warn("[P2PDraftHost] termination notification failed:", error);
+      }
     }
     await this.persistQueue;
     if (this.persistenceId) {

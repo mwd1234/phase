@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type Peer from "peerjs";
+import type { PersistedDraftDeckSubmission } from "../../services/draftPersistence";
 
 const persistence = vi.hoisted(() => ({
   saveDraftGuestSession: vi.fn(async () => {}),
   saveActiveDraftGuest: vi.fn(),
   clearDraftGuestRecovery: vi.fn(async () => {}),
   clearDraftDeckSubmission: vi.fn(async () => {}),
-  loadDraftDeckSubmission: vi.fn(async () => null),
+  loadDraftDeckSubmission: vi.fn(async (): Promise<PersistedDraftDeckSubmission | null> => null),
   saveDraftDeckSubmission: vi.fn(async () => {}),
 }));
 
@@ -14,7 +16,9 @@ vi.mock("../../services/draftPersistence", () => persistence);
 import { EMPTY_DRAFT_POOL_GROUPS, type DraftPlayerView } from "../draft-adapter";
 import { P2PDraftGuest, type DraftGuestConnection, type DraftGuestEvent } from "../p2p-draft-guest";
 import { DRAFT_PROTOCOL_VERSION, decodeDraftWireMessage, type DraftP2PMessage } from "../../network/draftProtocol";
+import * as protocol from "../../network/draftProtocol";
 import { FakeDraftDataConnection } from "../../network/__tests__/fakeDraftDataConnection";
+import type { DraftWorkspaceState } from "../../components/draft/workspace/types";
 
 function deferred() {
   let resolve!: () => void;
@@ -106,13 +110,36 @@ function firstContact(kind: "new" | "reconnect", initialView: DraftPlayerView): 
 
 const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+const workspace: DraftWorkspaceState = {
+  schemaVersion: 1,
+  placements: { "virtual-island": { zone: "deck", row: 0, column: 1, order: 0 } },
+  virtualBasics: [{ instanceId: "virtual-island", name: "Island" }],
+};
+
+function pauseNextEncoding() {
+  const started = deferred();
+  const resume = deferred();
+  const finished = deferred();
+  const encodeDraftWireMessage = protocol.encodeDraftWireMessage;
+  const encode = vi.spyOn(protocol, "encodeDraftWireMessage").mockImplementationOnce(async (message) => {
+    started.resolve();
+    await resume.promise;
+    try {
+      return await encodeDraftWireMessage(message);
+    } finally {
+      finished.resolve();
+    }
+  });
+  return { started: started.promise, resume: resume.resolve, finished: finished.promise, encode };
+}
+
 describe("P2P draft guest receive ordering", () => {
   const guests: P2PDraftGuest[] = [];
 
-  function createGuest(connection: DraftGuestConnection) {
+  function createGuest(connection: DraftGuestConnection, guestPeer: Peer = {} as never) {
     const conn = new FakeDraftDataConnection();
     // The fake implements only the DataConnection subset used by the session.
-    const guest = new P2PDraftGuest({} as never, "phase2-ABCDE", conn as never, connection);
+    const guest = new P2PDraftGuest(guestPeer, "phase2-ABCDE", conn as never, connection);
     guests.push(guest);
     const events: DraftGuestEvent[] = [];
     guest.onEvent((event) => events.push(event));
@@ -125,6 +152,8 @@ describe("P2P draft guest receive ordering", () => {
 
   afterEach(() => {
     for (const guest of guests.splice(0)) guest.dispose();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it.each(["new", "reconnect"] as const)(
@@ -247,6 +276,83 @@ describe("P2P draft guest receive ordering", () => {
     expect(events).toEqual([{ type: "reconnecting", attempt: 1 }]);
   });
 
+  it.each([
+    {
+      name: "submitPick",
+      send: (guest: P2PDraftGuest) => guest.submitPick(["pack-1-card"]),
+      message: { type: "draft_pick", cardInstanceIds: ["pack-1-card"] },
+    },
+    {
+      name: "submitPickWithDraftEffect",
+      send: (guest: P2PDraftGuest) => guest.submitPickWithDraftEffect("effect-card", ["pack-1-card", "pack-1-other"]),
+      message: {
+        type: "draft_pick_with_draft_effect",
+        effectCardInstanceId: "effect-card",
+        cardInstanceIds: ["pack-1-card", "pack-1-other"],
+      },
+    },
+    {
+      name: "updateWorkspace",
+      send: (guest: P2PDraftGuest) => guest.updateWorkspace(workspace),
+      message: { type: "draft_workspace_update", workspaceState: workspace },
+    },
+  ])("rejects $name during remote-close draining without discarding accepted receipts or views", async ({ send, message }) => {
+    const { guest, conn, events } = createGuest({ kind: "new", roomCode: "ABCDE", displayName: "Alice" });
+    const initialized = guest.initialize();
+    await conn.receiveRaw(rawMessage(welcome(view(1))));
+    await initialized;
+    events.length = 0;
+
+    // Prove the same public action and payload reach the real wire while open.
+    // In particular, workspace validation must not cause the later rejection.
+    await send(guest);
+    expect(conn.sentRaw).toHaveLength(2);
+    await expect(decodeDraftWireMessage(conn.sentRaw[1]!)).resolves.toEqual(message);
+
+    const submitted = guest.submitDeck(["Island"], []);
+    await vi.waitFor(() => expect(conn.sentRaw).toHaveLength(3));
+    const submission = await decodeDraftWireMessage(conn.sentRaw[2]!);
+    expect(submission.type).toBe("draft_submit_deck");
+    if (submission.type !== "draft_submit_deck") throw new Error("Expected draft deck submission");
+
+    const outboxCleared = deferred();
+    persistence.clearDraftDeckSubmission.mockReturnValueOnce(outboxCleared.promise);
+    const acknowledgedView = { ...view(2), status: "Deckbuilding" as const };
+    const nextView = { ...view(3), status: "Pairing" as const };
+    const ackReceived = conn.receiveRaw(rawMessage({
+      type: "draft_deck_submit_ack", submissionId: submission.submissionId, view: acknowledgedView,
+    }));
+    await vi.waitFor(() => expect(persistence.clearDraftDeckSubmission).toHaveBeenCalledWith(
+      "phase2-ABCDE", submission.submissionId,
+    ));
+    const nextReceived = conn.receiveRaw(rawMessage({ type: "draft_state_update", view: nextView }));
+    conn.simulateClose();
+
+    const sendResult = await send(guest).then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    expect(conn.sentRaw).toHaveLength(3);
+    expect(events).toEqual([]);
+
+    // Releasing persistence, not disposing the guest, must finish accepted work.
+    outboxCleared.resolve();
+    await Promise.all([ackReceived, nextReceived, submitted]);
+    expect(events).toEqual([
+      { type: "deckSubmissionAcknowledged", submissionId: submission.submissionId, view: acknowledgedView },
+      { type: "viewUpdated", view: acknowledgedView },
+      { type: "viewUpdated", view: nextView },
+      { type: "reconnecting", attempt: 1 },
+    ]);
+    expect(guest.view).toEqual(nextView);
+    expect(conn.sentRaw).toHaveLength(3);
+    expect(guest.isRecoveryRevoked).toBe(false);
+    expect(persistence.clearDraftGuestRecovery).not.toHaveBeenCalled();
+    expect(sendResult).toEqual({
+      status: "rejected", error: new Error("Draft connection is not open"),
+    });
+  });
+
   it("honors a leave acknowledgement queued behind persistence before the host closes", async () => {
     const { guest, conn, events } = createGuest({ kind: "new", roomCode: "ABCDE", displayName: "Alice" });
     const initialized = guest.initialize();
@@ -287,6 +393,174 @@ describe("P2P draft guest receive ordering", () => {
     expect(guest.isRecoveryRevoked).toBe(true);
     expect(persistence.clearDraftGuestRecovery).toHaveBeenCalledWith("phase2-ABCDE");
     expect(events.some((event) => event.type === "reconnecting")).toBe(false);
+  });
+
+  it.each(["remote close", "error"] as const)(
+    "observes a leave rejection when %s interrupts outgoing encoding",
+    async (end) => {
+      const { guest, conn } = createGuest({ kind: "new", roomCode: "ABCDE", displayName: "Alice" });
+      const initialized = guest.initialize();
+      await conn.receiveRaw(rawMessage(welcome(view(1))));
+      await initialized;
+
+      const encoding = pauseNextEncoding();
+      const wireSend = vi.spyOn(conn, "send");
+      const leaveResult = guest.leave().then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      await encoding.started;
+      expect(encoding.encode).toHaveBeenCalledExactlyOnceWith({
+        type: "draft_leave", draftProtocolVersion: DRAFT_PROTOCOL_VERSION, draftToken: "guest-token",
+      });
+      if (end === "remote close") conn.simulateClose();
+      else conn.simulateError(new Error("Transport failed"));
+      // Give a rejected acknowledgement a full turn to expose an unobserved
+      // promise while encoding remains blocked; only public results are caught.
+      await flushAsync();
+      encoding.resume();
+      await encoding.finished;
+      await flushAsync();
+
+      await expect(leaveResult).resolves.toEqual({
+        status: "rejected", error: new Error("Draft host disconnected before acknowledging leave"),
+      });
+      expect(wireSend).not.toHaveBeenCalled();
+      expect(conn.sentRaw).toHaveLength(1);
+      expect(guest.isRecoveryRevoked).toBe(false);
+      expect(persistence.clearDraftGuestRecovery).not.toHaveBeenCalled();
+    },
+  );
+
+  it("observes a deck receipt rejection when disposal interrupts outgoing encoding", async () => {
+    const { guest, conn } = createGuest({ kind: "new", roomCode: "ABCDE", displayName: "Alice" });
+    const initialized = guest.initialize();
+    await conn.receiveRaw(rawMessage(welcome(view(1))));
+    await initialized;
+
+    const encoding = pauseNextEncoding();
+    const wireSend = vi.spyOn(conn, "send");
+    const submissionResult = guest.submitDeck(["Island"], []).then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    await encoding.started;
+    expect(persistence.saveDraftDeckSubmission).toHaveBeenCalledOnce();
+    expect(encoding.encode).toHaveBeenCalledExactlyOnceWith({
+      type: "draft_submit_deck", submissionId: expect.any(String), mainDeck: ["Island"], commanders: [],
+    });
+    guest.dispose();
+    await flushAsync();
+    encoding.resume();
+    await encoding.finished;
+    await flushAsync();
+
+    await expect(submissionResult).resolves.toEqual({
+      status: "rejected", error: new Error("Draft connection disposed"),
+    });
+    expect(wireSend).not.toHaveBeenCalled();
+    expect(conn.sentRaw).toHaveLength(1);
+    expect(guest.isRecoveryRevoked).toBe(false);
+    expect(persistence.clearDraftGuestRecovery).not.toHaveBeenCalled();
+    expect(persistence.clearDraftDeckSubmission).not.toHaveBeenCalled();
+  });
+
+  it("keeps the original deck acknowledgement routed when an older reconnect replay fails", async () => {
+    const middleConn = new FakeDraftDataConnection();
+    const newestConn = new FakeDraftDataConnection();
+    middleConn.open = false;
+    newestConn.open = false;
+    const connect = vi.fn().mockReturnValueOnce(middleConn).mockReturnValueOnce(newestConn);
+    const { guest, conn, events } = createGuest(
+      { kind: "new", roomCode: "ABCDE", displayName: "Alice" },
+      { connect } as never,
+    );
+    const initialized = guest.initialize();
+    await conn.receiveRaw(rawMessage(welcome(view(1))));
+    await initialized;
+
+    const submitted = guest.submitDeck(["Island"], []);
+    const settled = vi.fn();
+    void submitted.then(
+      () => settled("fulfilled"),
+      (error: unknown) => settled(error),
+    );
+    await vi.waitFor(() => expect(conn.sentRaw).toHaveLength(2));
+    const submission = await decodeDraftWireMessage(conn.sentRaw[1]!);
+    expect(submission.type).toBe("draft_submit_deck");
+    if (submission.type !== "draft_submit_deck") throw new Error("Expected draft deck submission");
+    expect(persistence.saveDraftDeckSubmission).toHaveBeenCalledExactlyOnceWith("phase2-ABCDE", {
+      roomCode: "ABCDE", draftCode: "draft-xyz", draftToken: "guest-token",
+      submissionId: submission.submissionId, mainDeck: ["Island"], commanders: [],
+    });
+    const savedSubmission: PersistedDraftDeckSubmission = {
+      hostPeerId: "phase2-ABCDE", roomCode: "ABCDE", draftCode: "draft-xyz", draftToken: "guest-token",
+      submissionId: submission.submissionId, mainDeck: ["Island"], commanders: [], timestamp: Date.now(),
+    };
+    persistence.loadDraftDeckSubmission
+      .mockResolvedValueOnce(savedSubmission)
+      .mockResolvedValueOnce(savedSubmission);
+
+    // Drive the public reconnect timer and Peer open event into a second real
+    // session. Stall only its replay, after its handshake reaches the wire.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    conn.simulateClose();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connect).toHaveBeenCalledExactlyOnceWith("phase2-ABCDE");
+    middleConn.simulateOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(middleConn.sentRaw).toHaveLength(1);
+    await expect(decodeDraftWireMessage(middleConn.sentRaw[0]!)).resolves.toEqual({
+      type: "draft_reconnect", draftProtocolVersion: DRAFT_PROTOCOL_VERSION, draftToken: "guest-token",
+    });
+    const encoding = pauseNextEncoding();
+    await middleConn.receiveRaw(rawMessage(firstContact("reconnect", view(2))));
+    await encoding.started;
+    expect(encoding.encode).toHaveBeenCalledExactlyOnceWith(submission);
+    expect(middleConn.sentRaw).toHaveLength(1);
+
+    // A third session replays the same durable command before the second
+    // session's delayed encoder can fail and run its waiter cleanup.
+    middleConn.simulateClose();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(connect).toHaveBeenNthCalledWith(2, "phase2-ABCDE");
+    newestConn.simulateOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(newestConn.sentRaw).toHaveLength(1);
+    await expect(decodeDraftWireMessage(newestConn.sentRaw[0]!)).resolves.toEqual({
+      type: "draft_reconnect", draftProtocolVersion: DRAFT_PROTOCOL_VERSION, draftToken: "guest-token",
+    });
+    await newestConn.receiveRaw(rawMessage(firstContact("reconnect", view(3))));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(newestConn.sentRaw).toHaveLength(2);
+    await expect(decodeDraftWireMessage(newestConn.sentRaw[1]!)).resolves.toEqual(submission);
+    expect(guest.submitDeck(["Island"], [])).toBe(submitted);
+    expect(settled).not.toHaveBeenCalled();
+
+    encoding.resume();
+    await encoding.finished;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events).toContainEqual({ type: "error", message: "Draft connection is not open" });
+    expect(middleConn.sentRaw).toHaveLength(1);
+    expect(settled).not.toHaveBeenCalled();
+
+    const acknowledgedView = { ...view(4), status: "Pairing" as const };
+    await newestConn.receiveRaw(rawMessage({
+      type: "draft_deck_submit_ack", submissionId: submission.submissionId, view: acknowledgedView,
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(persistence.clearDraftDeckSubmission).toHaveBeenCalledExactlyOnceWith(
+      "phase2-ABCDE", submission.submissionId,
+    );
+    expect(events).toContainEqual({
+      type: "deckSubmissionAcknowledged", submissionId: submission.submissionId, view: acknowledgedView,
+    });
+    expect(settled).toHaveBeenCalledExactlyOnceWith("fulfilled");
+    await expect(submitted).resolves.toBeUndefined();
+    expect(persistence.saveDraftDeckSubmission).toHaveBeenCalledOnce();
+    expect(newestConn.sentRaw).toHaveLength(2);
+    expect(guest.view).toEqual(acknowledgedView);
   });
 
   it("still reports an active handshake persistence failure", async () => {

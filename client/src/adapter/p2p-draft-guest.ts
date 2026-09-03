@@ -149,7 +149,12 @@ export class P2PDraftGuest {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private deckSubmissionWaiters = new Map<
     string,
-    { acknowledgement: Promise<void>; resolve: () => void; reject: (error: Error) => void }
+    {
+      acknowledgement: Promise<void>;
+      resolve: () => void;
+      reject: (error: Error) => void;
+      activeAttempts: number;
+    }
   >();
   /** Set synchronously so two UI clicks share one outbox command. */
   private pendingDeckSubmission: Promise<void> | null = null;
@@ -383,14 +388,20 @@ export class P2PDraftGuest {
         resolve = resolvePromise;
         reject = rejectPromise;
       });
-      waiter = { acknowledgement, resolve, reject };
+      waiter = { acknowledgement, resolve, reject, activeAttempts: 0 };
       this.deckSubmissionWaiters.set(submissionId, waiter);
     }
+    waiter.activeAttempts += 1;
     try {
-      await this.session.send({ type: "draft_submit_deck", submissionId, mainDeck, commanders });
-      await waiter.acknowledgement;
+      // Observe the receipt even if the session closes while encoding the send.
+      await Promise.all([
+        this.session.send({ type: "draft_submit_deck", submissionId, mainDeck, commanders }),
+        waiter.acknowledgement,
+      ]);
     } finally {
-      if (this.deckSubmissionWaiters.get(submissionId) === waiter) {
+      // A failed replay must not remove the receipt route used by other attempts.
+      waiter.activeAttempts -= 1;
+      if (waiter.activeAttempts === 0 && this.deckSubmissionWaiters.get(submissionId) === waiter) {
         this.deckSubmissionWaiters.delete(submissionId);
       }
     }
@@ -800,12 +811,15 @@ export class P2PDraftGuest {
     }, LEAVE_ACK_TIMEOUT_MS);
 
     try {
-      await session.send({
-        type: "draft_leave",
-        draftProtocolVersion: DRAFT_PROTOCOL_VERSION,
-        draftToken,
-      });
-      await acknowledgement;
+      // Disconnect can reject the acknowledgement before encoding completes.
+      await Promise.all([
+        session.send({
+          type: "draft_leave",
+          draftProtocolVersion: DRAFT_PROTOCOL_VERSION,
+          draftToken,
+        }),
+        acknowledgement,
+      ]);
     } finally {
       clearTimeout(timeout);
       if (this.leaveAcknowledgement?.session === session) this.leaveAcknowledgement = null;

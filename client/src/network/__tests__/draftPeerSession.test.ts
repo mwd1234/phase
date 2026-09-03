@@ -26,6 +26,101 @@ function createTestSession() {
 
 afterEach(() => vi.restoreAllMocks());
 
+describe("DraftPeerSession send lifecycle", () => {
+  it.each(["local close", "error", "not open"] as const)("rejects sends after %s without encoding them", async (end) => {
+    const encode = vi.spyOn(protocol, "encodeDraftWireMessage");
+    const { conn, session } = createTestSession();
+    if (end === "local close") session.close();
+    else if (end === "error") conn.simulateError(new Error("connection failed"));
+    else conn.open = false;
+
+    await expect(session.send(firstMessage)).rejects.toThrow("Draft connection is not open");
+    // Best-effort callers may ignore the returned promise without creating an
+    // unhandled rejection; the queue still owns its internal recovery catch.
+    void session.send(secondMessage);
+    await flushAsync();
+
+    expect(encode).not.toHaveBeenCalled();
+    expect(conn.sentRaw).toEqual([]);
+    session.close();
+  });
+
+  it("rejects sends while accepted incoming messages are still draining", async () => {
+    const { conn, session } = createTestSession();
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    const disconnected = vi.fn();
+    const observed = vi.fn();
+    session.onDisconnect(disconnected);
+    session.onMessage(async (message) => {
+      started.resolve();
+      await finish.promise;
+      observed(message);
+    });
+    const received = conn.receiveRaw(await protocol.encodeDraftWireMessage(firstMessage));
+    await started.promise;
+    conn.simulateClose();
+
+    try {
+      await expect(session.send(secondMessage)).rejects.toThrow("Draft connection is not open");
+      expect(disconnected).not.toHaveBeenCalled();
+      expect(conn.sentRaw).toEqual([]);
+    } finally {
+      finish.resolve();
+      await received;
+    }
+
+    expect(observed).toHaveBeenCalledExactlyOnceWith(firstMessage);
+    expect(disconnected).toHaveBeenCalledExactlyOnceWith("connection closed");
+  });
+
+  it.each(["remote close", "local close", "error", "not open"] as const)("rejects encoding and queued sends when %s interrupts encoding", async (end) => {
+    const encoding = deferred<Uint8Array>();
+    const started = deferred<void>();
+    const encode = vi.spyOn(protocol, "encodeDraftWireMessage").mockImplementationOnce(() => {
+      started.resolve();
+      return encoding.promise;
+    });
+    const { conn, session } = createTestSession();
+    const send = vi.spyOn(conn, "send");
+    const first = session.send(firstMessage);
+    await started.promise;
+    const second = session.send(secondMessage);
+    if (end === "remote close") conn.simulateClose();
+    else if (end === "local close") session.close();
+    else if (end === "error") conn.simulateError(new Error("connection failed"));
+    else conn.open = false;
+    encoding.resolve(new Uint8Array([0]));
+
+    const outcomes = await Promise.allSettled([first, second]);
+
+    expect(outcomes).toEqual([
+      { status: "rejected", reason: new Error("Draft connection is not open") },
+      { status: "rejected", reason: new Error("Draft connection is not open") },
+    ]);
+    expect(encode).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    session.close();
+  });
+
+  it.each(["encoding", "channel"] as const)("does not poison later sends after an %s failure", async (failure) => {
+    const { conn, session } = createTestSession();
+    const error = new Error("send failed");
+    if (failure === "encoding") {
+      vi.spyOn(protocol, "encodeDraftWireMessage").mockRejectedValueOnce(error);
+    } else {
+      vi.spyOn(conn, "send").mockImplementationOnce(() => { throw error; });
+    }
+
+    await expect(session.send(firstMessage)).rejects.toBe(error);
+    await session.send(secondMessage);
+
+    expect(conn.sentRaw).toHaveLength(1);
+    await expect(protocol.decodeDraftWireMessage(conn.sentRaw[0]!)).resolves.toEqual(secondMessage);
+    session.close();
+  });
+});
+
 describe("DraftPeerSession receive ordering", () => {
   it("preserves arrival order when the first decode takes longer", async () => {
     const firstDecode = deferred<DraftP2PMessage>();

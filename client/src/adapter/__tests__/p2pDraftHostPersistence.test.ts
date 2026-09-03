@@ -21,7 +21,7 @@ vi.mock("../../services/draftPersistence", () => ({
 }));
 
 import { P2PDraftHost } from "../p2p-draft-host";
-import { DRAFT_PROTOCOL_VERSION } from "../../network/draftProtocol";
+import { DRAFT_PROTOCOL_VERSION, type DraftMatchBinding, type DraftP2PMessage } from "../../network/draftProtocol";
 
 type PersistenceHost = {
   adapter: { exportSession: () => Promise<string> };
@@ -214,6 +214,136 @@ describe("P2PDraftHost persistence disposal", () => {
     expect(saveDraftHostSession).toHaveBeenCalledTimes(1);
     await current.dispose();
   });
+
+  it("finishes draft termination after a guest notification send fails", async () => {
+    const host = recoveredHost("Host");
+    const privateHost = host as unknown as PersistenceHost & {
+      hostPeer: { destroy: ReturnType<typeof vi.fn> };
+      hostConnectionUnsub: ReturnType<typeof vi.fn>;
+      guestSessions: Map<number, unknown>;
+      persistenceClosed: boolean;
+    };
+    const failure = new Error("guest transport closed");
+    const failedSession = { send: vi.fn(async () => { throw failure; }), close: vi.fn() };
+    const liveSession = { send: vi.fn(async () => {}), close: vi.fn() };
+    privateHost.guestSessions.set(1, failedSession);
+    privateHost.guestSessions.set(2, liveSession);
+    privateHost.hostPeer.destroy = vi.fn();
+    privateHost.hostConnectionUnsub = vi.fn();
+    privateHost.persistSession();
+    await privateHost.persistQueue;
+    expect(saveDraftHostSession).toHaveBeenCalledWith("shared-recovery", expect.any(Object));
+
+    const dispose = vi.spyOn(host, "dispose");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const termination = host.terminateDraft();
+      expect(privateHost.persistenceClosed).toBe(true);
+      await expect(termination).resolves.toBeUndefined();
+
+      const notification = { type: "draft_host_left", reason: "Host left the draft" };
+      expect(failedSession.send).toHaveBeenCalledWith(notification);
+      expect(liveSession.send).toHaveBeenCalledWith(notification);
+      expect(warn).toHaveBeenCalledWith("[P2PDraftHost] termination notification failed:", failure);
+      expect(clearDraftHostSession).toHaveBeenCalledExactlyOnceWith("shared-recovery");
+      expect(liveSession.send).toHaveBeenCalledBefore(clearDraftHostSession);
+      expect(clearDraftHostSession).toHaveBeenCalledBefore(dispose);
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(privateHost.hostConnectionUnsub).toHaveBeenCalledOnce();
+      expect(failedSession.close).toHaveBeenCalledOnce();
+      expect(liveSession.close).toHaveBeenCalledOnce();
+      expect(privateHost.guestSessions.size).toBe(0);
+      expect(privateHost.hostPeer.destroy).toHaveBeenCalledOnce();
+      expect(liveSession.close).toHaveBeenCalledBefore(privateHost.hostPeer.destroy);
+    } finally {
+      warn.mockRestore();
+      dispose.mockRestore();
+      await host.dispose();
+    }
+  });
+
+  it.each(["fresh", "duplicate"] as const)(
+    "retains a %s settlement receipt after acknowledgement send failure and accepts an exact retry once",
+    async (attempt) => {
+      const host = recoveredHost("Host");
+      const privateHost = host as unknown as {
+        adapter: {
+          reportMatchResult: ReturnType<typeof vi.fn>;
+          getViewForSeat: ReturnType<typeof vi.fn>;
+          exportSession: ReturnType<typeof vi.fn>;
+        };
+        draftStarted: boolean;
+        guestSessions: Map<number, unknown>;
+        matchBindings: Map<string, DraftMatchBinding>;
+        settlementReceipts: Map<string, { receiptId: string; revision: number }>;
+        settlementOutbox: Map<string, unknown>;
+        handleGuestMessage: (seat: number, message: DraftP2PMessage) => Promise<void>;
+      };
+      const binding: DraftMatchBinding = {
+        podId: "draft-1", matchId: "match-12", round: 1,
+        sessionKey: "session-1", lease: "lease-1", nonce: "nonce-1", revision: 0,
+        matchAuthoritySeat: 1,
+      };
+      const view = {
+        status: "MatchInProgress",
+        current_round: 1,
+        pairings: [{ match_id: binding.matchId, round: 1, seat_a: 1, seat_b: 2 }],
+      };
+      privateHost.draftStarted = true;
+      privateHost.adapter.reportMatchResult = vi.fn(async () => view);
+      privateHost.adapter.getViewForSeat = vi.fn(async () => view);
+      privateHost.adapter.exportSession = vi.fn(async () => JSON.stringify(view));
+      privateHost.matchBindings.set(binding.matchId, binding);
+      const sendAck = vi.fn<(message: DraftP2PMessage) => Promise<void>>(async () => {});
+      privateHost.guestSessions.set(1, {
+        send: async (message: DraftP2PMessage) => {
+          if (message.type === "draft_match_settlement_ack") await sendAck(message);
+        },
+        close: vi.fn(),
+      });
+      const settlement: DraftP2PMessage = {
+        type: "draft_match_settlement",
+        settlement: { binding, receiptId: "receipt-1", winnerSeat: 1 },
+      };
+      const acknowledgement = {
+        type: "draft_match_settlement_ack", matchId: binding.matchId, receiptId: "receipt-1", revision: 0,
+      };
+      const failure = new Error("acknowledgement transport closed");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        if (attempt === "duplicate") {
+          await privateHost.handleGuestMessage(1, settlement);
+          expect(sendAck).toHaveBeenCalledExactlyOnceWith(acknowledgement);
+          sendAck.mockClear();
+        }
+        sendAck.mockRejectedValueOnce(failure);
+
+        await privateHost.handleGuestMessage(1, settlement);
+
+        await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(
+          "[P2PDraftHost] settlement acknowledgement failed:", failure,
+        ));
+        expect(sendAck).toHaveBeenCalledExactlyOnceWith(acknowledgement);
+        expect(privateHost.settlementReceipts.get(binding.matchId)).toEqual({ receiptId: "receipt-1", revision: 0 });
+        expect(privateHost.settlementOutbox.size).toBe(0);
+        expect(saveDraftHostSession).toHaveBeenLastCalledWith("shared-recovery", expect.objectContaining({
+          settlementReceipts: [{ matchId: binding.matchId, receiptId: "receipt-1", revision: 0 }],
+          settlementOutbox: [],
+        }));
+        expect(saveDraftHostSession).toHaveBeenCalledBefore(sendAck);
+
+        await privateHost.handleGuestMessage(1, settlement);
+
+        expect(sendAck).toHaveBeenCalledTimes(2);
+        expect(sendAck).toHaveBeenLastCalledWith(acknowledgement);
+        expect(privateHost.adapter.reportMatchResult).toHaveBeenCalledExactlyOnceWith(binding.matchId, 1);
+        expect(warn).toHaveBeenCalledOnce();
+      } finally {
+        warn.mockRestore();
+        await host.dispose();
+      }
+    },
+  );
 
   it("releases pause and reconnect state when a disconnected seat becomes a bot or is kicked", async () => {
     const host = ephemeralHost("Host");

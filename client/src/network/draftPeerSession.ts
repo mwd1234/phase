@@ -11,6 +11,7 @@ import type { DraftP2PMessage } from "./draftProtocol";
 import { decodeDraftWireMessage, encodeDraftWireMessage } from "./draftProtocol";
 
 export interface DraftPeerSession {
+  /** Resolves after submitting bytes to an open connection, not after peer acknowledgement. */
   send(msg: DraftP2PMessage): Promise<void>;
   onMessage(handler: (msg: DraftP2PMessage) => void | Promise<void>): () => void;
   onDisconnect(handler: (reason: string) => void): () => void;
@@ -38,6 +39,12 @@ export function createDraftPeerSession(
 
   function isClosed(): boolean {
     return lifecycle === "closed";
+  }
+
+  function assertCanSend(): void {
+    if (lifecycle !== "open" || !conn.open) {
+      throw new Error("Draft connection is not open");
+    }
   }
 
   function fireDisconnect(reason: string): void {
@@ -94,11 +101,14 @@ export function createDraftPeerSession(
   const session: DraftPeerSession = {
     send(msg: DraftP2PMessage): Promise<void> {
       const p = sendChain.then(async () => {
-        if (lifecycle !== "open" || !conn.open) return;
+        assertCanSend();
         const bytes = await encodeDraftWireMessage(msg);
+        // Compression can outlive the connection, including its receive drain.
+        assertCanSend();
         conn.send(bytes);
       });
-      sendChain = p.catch(() => { /* swallow */ });
+      // Keep the queue live while preserving this entry's rejection for callers.
+      sendChain = p.catch(() => { /* best-effort callers may ignore the result */ });
       return p;
     },
     onMessage(handler) {
