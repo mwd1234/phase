@@ -2592,8 +2592,12 @@ pub(super) fn apply_post_replacement_effect(
     resolve_post_replacement_chain(state, &resolved, events)
 }
 
-/// CR 615.5 + CR 608.2c: replacement follow-ups execute immediately, in order,
-/// independently of an input prompt belonging to their caller.
+/// CR 608.2c: execute instructions in the order written.
+/// CR 615.5: a prevention effect's additional effect occurs immediately after
+/// the prevention.
+///
+/// Engine invariant: isolate `state.waiting_for` so caller-owned prompts cannot
+/// suspend the child chain or be mistaken for new child input.
 fn resolve_post_replacement_chain(
     state: &mut GameState,
     resolved: &ResolvedAbility,
