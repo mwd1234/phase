@@ -5870,7 +5870,7 @@ mod tests {
             let ReplacementResult::NeedsChoice(player) = replacement_mod::replace_event(
                 &mut state,
                 ProposedEvent::LifeGain {
-                    player_id: PlayerId(0),
+                    player_id: PlayerId(1),
                     amount: 1,
                     applied: HashSet::new(),
                 },
@@ -5878,6 +5878,11 @@ mod tests {
             ) else {
                 panic!("optional replacement must request an actual choice")
             };
+            assert_eq!(player, PlayerId(1), "the source controller must choose");
+            assert_ne!(
+                player, state.active_player,
+                "the replacement's controller must differ from the active player"
+            );
             state.waiting_for = replacement_mod::replacement_choice_waiting_for(player, &state);
 
             apply_as_current(&mut state, GameAction::ChooseReplacement { index: 0 })
