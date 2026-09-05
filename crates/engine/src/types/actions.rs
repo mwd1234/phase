@@ -130,6 +130,12 @@ pub enum OutsideGameSelection {
     Sideboard { sideboard_index: usize },
     /// CR 406.3: A face-up exile object the player owns.
     FaceUpExile { object_id: ObjectId },
+    /// CR 400.11b: A card in the booster pack this effect just opened,
+    /// identified by its slot in the opened pack. The pack's cards are not in
+    /// any zone and have no `ObjectId` until one is taken, so the slot index is
+    /// the only stable identity — and it keeps two identically named cards in
+    /// the same pack distinguishable.
+    BoosterPack { pack_slot: usize },
 }
 
 #[derive(

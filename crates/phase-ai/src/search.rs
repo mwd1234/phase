@@ -1530,6 +1530,12 @@ pub fn fallback_action(
                                 object_id: *object_id,
                             }
                         }
+                        // CR 400.11b: one pick per opened pack slot.
+                        OutsideGameChoiceSource::BoosterPack { pack_slot, .. } => {
+                            OutsideGameSelection::BoosterPack {
+                                pack_slot: *pack_slot,
+                            }
+                        }
                     })
                 })
                 .take(*count)

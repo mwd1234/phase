@@ -23107,7 +23107,7 @@ fn cant_be_activated_effect_standalone_targets_creature() {
             duration,
             end_cost: _,
         } => {
-            // CR 611.2a (`docs/MagicCompRules.txt:2908`): this sentence states NO
+            // CR 611.2a: this sentence states NO
             // window of its own, so the AST must say so. The recognizer used to
             // inject `Some(UntilEndOfTurn)` here, indistinguishable from a printed
             // window, which blocked an enclosing sentence's duration from reaching
@@ -34068,8 +34068,8 @@ fn suffix_condition_with_otherwise_integration() {
 
 // --- CR 110.2a controller-override binding (#6691) ---
 
-/// CR 110.2a (docs/MagicCompRules.txt:618) + CR 400.1 (:1933) + CR 400.3
-/// (:1937) + CR 404.1 (:2030) + CR 108.3 (:564): Jailbreak's
+/// CR 110.2a + CR 400.1 + CR 400.3 +
+/// CR 404.1 + CR 108.3: Jailbreak's
 /// "under their control" binds to the moved card's OWNER, because a card in an
 /// opponent's graveyard is in ITS OWNER's graveyard.
 ///
@@ -34149,7 +34149,7 @@ fn under_your_control_still_binds_to_you_after_the_collapse() {
     }
 }
 
-/// CR 110.2 (docs/MagicCompRules.txt:616): owner forms use the existing
+/// CR 110.2: owner forms use the existing
 /// per-moved-object-owner carrier (`None`), rather than a player override, and
 /// specifically must not be misread as the third-person `TheirAnaphor` (B3).
 #[test]
@@ -34351,7 +34351,7 @@ fn return_destination_tapped() {
 fn return_destination_owners_control_not_under_your_control() {
     let (_, dest) = strip_return_destination_ext("it to the battlefield under its owner's control");
     let d = dest.expect("should parse destination");
-    // CR 110.2 (docs/MagicCompRules.txt:616): the owner form is RECOGNIZED as a
+    // CR 110.2: the owner form is RECOGNIZED as a
     // clause but restates the default, so binding it yields
     // `EntersUnderSpec::Default` — never a controller override, and never the
     // third-person `TheirAnaphor`.
@@ -58708,4 +58708,117 @@ fn part_in_friendship_conditional_kept_destination_shape() {
     };
     assert!(lands_typed.type_filters.contains(&TypeFilter::Land));
     assert_eq!(lands_typed.controller, Some(ControllerRef::You));
+}
+
+/// CR 400.11 + CR 400.11b + CR 701.20: Booster Tutor's whole sentence is ONE
+/// effect. Splitting on its commas produced an unmodellable "open" head plus an
+/// orphaned `Reveal` and `ChangeZone` pointed at a nonexistent parent target,
+/// which is why the printed card did nothing.
+#[test]
+fn open_booster_pack_parses_the_whole_sentence_as_one_effect() {
+    let def = parse_effect_chain(
+        "Open a sealed Magic booster pack, reveal the cards, and put one of them into your hand.",
+        AbilityKind::Spell,
+    );
+    assert!(
+        matches!(
+            def.effect.as_ref(),
+            Effect::OpenBoosterPack {
+                filter: TargetFilter::Any,
+                count: QuantityExpr::Fixed { value: 1 },
+                destination: Zone::Hand,
+                reveal: true,
+            }
+        ),
+        "expected a single OpenBoosterPack, got {:?}",
+        def.effect
+    );
+    assert!(
+        def.sub_ability.is_none(),
+        "the reveal and the take are folded into the effect, not chained: {:?}",
+        def.sub_ability
+    );
+}
+
+/// The recognizer is composed one `alt` per axis, so each printed variation of
+/// the head and the take clause reaches the same effect rather than needing its
+/// own spelled-out alternative.
+#[test]
+fn open_booster_pack_accepts_the_printed_phrasing_axes() {
+    for (text, expected_reveal, expected_destination) in [
+        (
+            "Open a booster pack, reveal the cards, and put one of them into your hand.",
+            true,
+            Zone::Hand,
+        ),
+        (
+            "Open a Magic booster pack, reveal those cards, and put one of them into your hand.",
+            true,
+            Zone::Hand,
+        ),
+        (
+            "Open a sealed booster pack and put one of them into your graveyard.",
+            false,
+            Zone::Graveyard,
+        ),
+        (
+            "Open a sealed Magic booster pack, reveal the cards, then put one of those cards onto the battlefield.",
+            true,
+            Zone::Battlefield,
+        ),
+    ] {
+        let def = parse_effect_chain(text, AbilityKind::Spell);
+        let Effect::OpenBoosterPack {
+            destination,
+            reveal,
+            ..
+        } = def.effect.as_ref()
+        else {
+            panic!("expected OpenBoosterPack for {text}, got {:?}", def.effect);
+        };
+        assert_eq!(*reveal, expected_reveal, "reveal axis for {text}");
+        assert_eq!(*destination, expected_destination, "destination for {text}");
+    }
+}
+
+/// "Up to one of them" peels into the choice's up-to flag the same way every
+/// other `QuantityExpr::UpTo` carrier does.
+#[test]
+fn open_booster_pack_carries_an_up_to_take_count() {
+    let def = parse_effect_chain(
+        "Open a sealed Magic booster pack, reveal the cards, and put up to two of them into your hand.",
+        AbilityKind::Spell,
+    );
+    let Effect::OpenBoosterPack { count, .. } = def.effect.as_ref() else {
+        panic!("expected OpenBoosterPack, got {:?}", def.effect);
+    };
+    let (inner, up_to) = count.peel_up_to();
+    assert!(up_to, "an 'up to' take clause must peel as up-to");
+    assert!(matches!(inner, QuantityExpr::Fixed { value: 2 }));
+}
+
+/// A sentence that merely mentions a booster pack must not be swallowed by the
+/// recognizer — it declines and the generic pipeline keeps its own reading.
+#[test]
+fn a_non_open_booster_sentence_is_not_swallowed() {
+    assert!(
+        parse_open_booster_pack_ir(
+            "Draw a card for each booster pack you own.",
+            AbilityKind::Spell,
+            &ParseContext::default(),
+        )
+        .is_none(),
+        "the recognizer must require the open-a-pack head"
+    );
+    // Positive reach-guard: the real sentence DOES reach the recognizer, so the
+    // negative above cannot be passing because the recognizer is unreachable.
+    assert!(
+        parse_open_booster_pack_ir(
+            "Open a sealed Magic booster pack, reveal the cards, and put one of them into your hand.",
+            AbilityKind::Spell,
+            &ParseContext::default(),
+        )
+        .is_some(),
+        "the printed sentence must reach the recognizer"
+    );
 }

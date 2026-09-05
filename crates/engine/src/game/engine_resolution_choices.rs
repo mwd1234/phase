@@ -4429,6 +4429,8 @@ pub(super) fn handle_resolution_choice(
             let mut sideboard_counts: HashMap<usize, usize> = HashMap::new();
             let mut exile_seen: std::collections::HashSet<ObjectId> =
                 std::collections::HashSet::new();
+            let mut pack_slots_seen: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
             for selection in &selections {
                 match selection {
                     OutsideGameSelection::Sideboard { sideboard_index } => {
@@ -4438,6 +4440,15 @@ pub(super) fn handle_resolution_choice(
                         if !exile_seen.insert(*object_id) {
                             return Err(EngineError::InvalidAction(
                                 "Same face-up exile card selected more than once".to_string(),
+                            ));
+                        }
+                    }
+                    // CR 400.11b: each slot of an opened pack is one physical
+                    // card, so a slot can be taken at most once.
+                    OutsideGameSelection::BoosterPack { pack_slot } => {
+                        if !pack_slots_seen.insert(*pack_slot) {
+                            return Err(EngineError::InvalidAction(
+                                "Same booster pack card selected more than once".to_string(),
                             ));
                         }
                     }
@@ -4471,6 +4482,18 @@ pub(super) fn handle_resolution_choice(
                     ));
                 }
             }
+            for pack_slot in &pack_slots_seen {
+                if !choices.iter().any(|choice| match &choice.source {
+                    OutsideGameChoiceSource::BoosterPack {
+                        pack_slot: slot, ..
+                    } => slot == pack_slot,
+                    _ => false,
+                }) {
+                    return Err(EngineError::InvalidAction(
+                        "Selected booster pack card not in outside-game choices".to_string(),
+                    ));
+                }
+            }
 
             let mut chosen_ids = Vec::new();
             for selection in selections {
@@ -4485,6 +4508,34 @@ pub(super) fn handle_resolution_choice(
                             )
                             .map_err(|error| EngineError::InvalidAction(format!("{error:?}")))?;
                         chosen_ids.push(object_id);
+                    }
+                    // CR 400.11b: the pack's card is not in any zone, so it is
+                    // materialized from the `CardFace` the choice entry carries
+                    // — the same path the sideboard pool uses — rather than
+                    // moved through the `ChangeZone` replacement pipeline.
+                    OutsideGameSelection::BoosterPack { pack_slot } => {
+                        let card = choices
+                            .iter()
+                            .find_map(|choice| match &choice.source {
+                                OutsideGameChoiceSource::BoosterPack {
+                                    pack_slot: slot,
+                                    card,
+                                    ..
+                                } if *slot == pack_slot => Some(card.clone()),
+                                _ => None,
+                            })
+                            .ok_or_else(|| {
+                                EngineError::InvalidAction(
+                                    "Selected booster pack card not in outside-game choices"
+                                        .to_string(),
+                                )
+                            })?;
+                        chosen_ids.push(effects::search_outside_game::put_outside_game_face_into(
+                            state,
+                            player,
+                            &card,
+                            destination,
+                        ));
                     }
                     OutsideGameSelection::FaceUpExile { object_id } => {
                         match effects::search_outside_game::put_face_up_exile_into(

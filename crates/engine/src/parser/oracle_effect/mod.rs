@@ -4843,7 +4843,7 @@ fn try_parse_cant_cast_spells_effect(tp: TextPair<'_>) -> Option<ParsedEffectCla
         unless_pay: None,
     };
 
-    // CR 611.2a (:2908) + CR 514.2 (:2442): this recognizer owns the leading duration
+    // CR 611.2a + CR 514.2: this recognizer owns the leading duration
     // (`strip_temporary_restriction_duration_prefix`) AND builds its own sub_ability
     // chain from the tail conjuncts, so it must stamp through the single
     // chain-distributing authority. Writing `duration` into the literal reached the head
@@ -6446,8 +6446,8 @@ fn original_counter_choice_list_items(
 /// Requires at least 2 items and that every item names a real counter type;
 /// a non-counter list returns `None`. Nom-only — no string dispatch.
 ///
-/// CR 122.1b: keyword counters (docs/MagicCompRules.txt:1180).
-/// CR 122.1: named counters (docs/MagicCompRules.txt:1176).
+/// CR 122.1b: keyword counters.
+/// CR 122.1: named counters.
 pub(crate) fn classify_and_parse_counter_choice_list(
     choices_text: &str,
 ) -> Option<Vec<(CounterType, QuantityExpr)>> {
@@ -15011,6 +15011,135 @@ fn parse_choose_survivors_destroy_rest_ir(
     })
 }
 
+/// CR 400.11 + CR 400.11b + CR 701.20: Whole-line recognizer for the
+/// open-a-booster-pack class (Booster Tutor; A Container of Booster Packs and
+/// Summon the Pack share the head and differ only in the take clause).
+///
+/// The sentence is ONE effect, not a chain: the reveal and the take are not
+/// independently valid steps — there is nothing to reveal or to take until the
+/// pack has been opened, and the cards never enter a zone the way a chained
+/// `Reveal` → `ChangeZone` pair would require. Splitting on the commas is what
+/// left the printed card parsing as an `Unimplemented("open")` head followed by
+/// a `Reveal`/`ChangeZone` pair pointed at a nonexistent parent target.
+///
+/// Grammar, one `alt` per axis:
+/// ```text
+/// "open a " ["sealed "] ["magic "] "booster pack"
+///   [", reveal " ("the"|"those") " cards"]
+///   (", and put "|", then put "|" and put "|", put ") ["up to "] NUMBER
+///   " of " ("them"|"those cards"|"the cards"|"the revealed cards")
+///   DESTINATION ["."]
+/// ```
+fn parse_open_booster_pack_ir(
+    text: &str,
+    kind: AbilityKind,
+    ctx: &ParseContext,
+) -> Option<EffectChainIr> {
+    let lower = text.to_lowercase();
+
+    let parsed = nom_on_lower(text, &lower, |input| {
+        // Head: the pack itself. "sealed" and "Magic" are printed flavor on the
+        // same noun, so each is its own optional modifier rather than a
+        // separate spelled-out alternative.
+        let (input, _) = tag("open a ").parse(input)?;
+        let (input, _) = opt(tag("sealed ")).parse(input)?;
+        let (input, _) = opt(tag("magic ")).parse(input)?;
+        let (input, _) = tag("booster pack").parse(input)?;
+
+        // CR 701.20: the reveal half. Absent on cards that open a pack without
+        // showing it to every player.
+        let (input, reveal) = map(
+            opt((
+                tag(", reveal "),
+                alt((tag("the"), tag("those"))),
+                tag(" cards"),
+            )),
+            |matched| matched.is_some(),
+        )
+        .parse(input)?;
+
+        // The take clause: how many of the opened cards are brought into the
+        // game, and where they go.
+        let (input, _) = alt((
+            tag(", and put "),
+            tag(", then put "),
+            tag(" and put "),
+            tag(", put "),
+        ))
+        .parse(input)?;
+        let (input, up_to) = map(opt(tag("up to ")), |matched| matched.is_some()).parse(input)?;
+        let (input, count) = nom_primitives::parse_number(input)?;
+        let (input, _) = tag(" of ").parse(input)?;
+        let (input, _) = alt((
+            tag("them"),
+            tag("those cards"),
+            tag("the revealed cards"),
+            tag("the cards"),
+        ))
+        .parse(input)?;
+        let (input, destination) = parse_booster_take_destination(input)?;
+        let (input, _) = opt(tag(".")).parse(input)?;
+        let (input, _) = eof.parse(input)?;
+        Ok((input, (reveal, up_to, count, destination)))
+    });
+    let ((reveal, up_to, count, destination), _) = parsed?;
+
+    let count = QuantityExpr::Fixed {
+        value: count as i32,
+    };
+    let count = if up_to {
+        QuantityExpr::up_to(count)
+    } else {
+        count
+    };
+
+    let mut builder = ClauseIrBuilder::new(text);
+    builder
+        .clause(
+            text,
+            parsed_clause(Effect::OpenBoosterPack {
+                // CR 400.11: Booster Tutor takes "one of them" — any card in
+                // the pack. A filtered take clause ("all creature cards
+                // revealed this way", Summon the Pack) narrows this.
+                filter: TargetFilter::Any,
+                count,
+                destination,
+                reveal,
+            }),
+            None,
+            ClauseDisposition::Emit {
+                followup: None,
+                intrinsic: None,
+            },
+        )
+        .push();
+
+    Some(EffectChainIr {
+        clauses: builder.finish(),
+        kind,
+        continuation_kind: Some(kind),
+        player_scope_rewrite: PlayerScopeRewrite::Apply,
+        chain_rounding: None,
+        actor: ctx.actor.clone(),
+        in_trigger: ctx.in_trigger,
+        repeat_until: None,
+    })
+}
+
+/// CR 400.11b: the zone a card taken out of an opened pack enters. Nested by
+/// preposition so each preposition names its zone family once.
+fn parse_booster_take_destination(input: &str) -> OracleResult<'_, Zone> {
+    // The bare zone-word combinator, not `oracle_nom::filter::parse_zone_word`:
+    // the possessive ("your") is consumed by the preposition arm here, so the
+    // remaining token is the bare zone noun.
+    use super::oracle_target::parse_zone_word;
+    alt((
+        preceded(tag(" into your "), parse_zone_word),
+        value(Zone::Battlefield, tag(" onto the battlefield")),
+    ))
+    .parse(input)
+}
+
 /// CR 107.1 + CR 608.2e: Whole-chain recognizer for the Balance equalization
 /// class (Balance, Restore Balance, Balancing Act).
 ///
@@ -17714,7 +17843,7 @@ fn try_parse_verb_and_target<'a>(
         };
         return match dest {
             Some(d) if d.zone == Zone::Battlefield => {
-                // CR 110.2a (docs/MagicCompRules.txt:618) + CR 608.2c (:2793):
+                // CR 110.2a + CR 608.2c:
                 // bind the raw control clause BEFORE either struct literal —
                 // the `target,` field shorthand MOVES `target`, so a `&target`
                 // borrow inside the literal would not compile. `d.control` is
@@ -17784,7 +17913,7 @@ fn try_parse_verb_and_target<'a>(
                             target,
                             origin,
                             destination: Zone::Hand,
-                            // CR 110.2 (docs/MagicCompRules.txt:616): controller
+                            // CR 110.2: controller
                             // semantics apply only while an object is a permanent.
                             enters_under: EntersUnderSpec::Default,
                             enter_tapped: false,
@@ -17821,7 +17950,7 @@ fn try_parse_verb_and_target<'a>(
                             target,
                             origin,
                             destination: d.zone,
-                            // CR 110.2 (docs/MagicCompRules.txt:616): controller
+                            // CR 110.2: controller
                             // semantics apply only while an object is a permanent.
                             enters_under: EntersUnderSpec::Default,
                             enter_tapped: false,
@@ -30276,14 +30405,102 @@ fn rewrite_rounding_mode(def: &mut AbilityDefinition, mode: RoundingMode) {
     }
 }
 
-fn lift_each_player_exile_top_scope(effect: &mut Effect, player_scope: &mut Option<PlayerFilter>) {
-    if player_scope.is_some() {
+/// CR 401.1 + CR 608.2c: a distributive top-of-library exile names one library per player
+/// in scope, but `Effect::ExileTop` resolves exactly ONE library (`exile_top.rs` →
+/// `resolve_player_for_context_ref`). The distribution therefore rides on the ability's
+/// `player_scope` fan-out, which rebinds the acting controller to each player in turn
+/// (`effects/mod.rs` `resolve_ability_chain`).
+///
+/// CR 102.2 + CR 102.3: `Opponent` narrows that iteration to the controller's opponents
+/// (team-aware, eliminated-player-safe) — the ONLY difference from `All`.
+///
+/// Erasure of the owner sentinel is UNCONDITIONAL: never clobbering an enclosing
+/// `player_scope` and always erasing the sentinel are independent obligations, and an
+/// early return on `player_scope.is_some()` would satisfy the first by abandoning the
+/// second. `TargetFilter::Opponent` left in this slot resolves at runtime to
+/// `opponents(..).first()` (`game/targeting.rs`), i.e. silently ONE opponent.
+fn lift_distributive_exile_top_scope(effect: &mut Effect, player_scope: &mut Option<PlayerFilter>) {
+    let Effect::ExileTop { player, .. } = effect else {
         return;
-    }
-    if let Effect::ExileTop { player, .. } = effect {
-        if matches!(player, TargetFilter::ScopedPlayer) {
+    };
+    let own_scope = match player {
+        TargetFilter::ScopedPlayer => PlayerFilter::All,
+        TargetFilter::Opponent => PlayerFilter::Opponent,
+        // Every other owner is a real single-library reference (Controller, Player,
+        // Typed{Opponent} for "target opponent's", ParentTarget, …): pass through untouched.
+        _ => return,
+    };
+    match player_scope {
+        // No enclosing iteration: this clause's own distributive owner defines one.
+        None => {
+            *player_scope = Some(own_scope);
             *player = TargetFilter::Controller;
-            *player_scope = Some(PlayerFilter::All);
+        }
+        // An enclosing `player_scope` is already iterating (a leading "Each opponent …"
+        // subject). NEVER clobber it — that is what the previous early return protected.
+        // But the sentinel must still be erased: `ScopedPlayer` reads the enclosing
+        // iteration's rebound player (`resolve_player_for_context_ref` →
+        // `ability.scoped_player`), which is the reading the cards already in this state
+        // rely on today.
+        Some(_) => *player = TargetFilter::ScopedPlayer,
+    }
+}
+
+/// CR 401.1: `TargetFilter::Opponent` in an `Effect::ExileTop.player` slot is a PARSE-ONLY
+/// scope sentinel that `lift_distributive_exile_top_scope` erases unconditionally.
+/// If one ever survives, `exile_top.rs` resolves it through `resolve_player_for_context_ref`,
+/// whose `Opponent` arm falls back to `opponents(..).first()` (`game/targeting.rs`) — silently
+/// exiling ONE opponent's top card instead of each opponent's. That failure is fail-OPEN
+/// (a wrong but usable answer), so assert on it.
+///
+/// Deliberately does NOT assert on `TargetFilter::ScopedPlayer`: that sentinel legitimately
+/// survives on printed cards whose clause already carries a `player_scope`, where it resolves
+/// to `ability.scoped_player` — the rebound iterating player. Benign, and load-bearing.
+///
+/// This is a CI regression net, NOT production safety: `debug_assertions` is compiled out of
+/// the shipped WASM release profile. The production guarantee is the unconditional erasure in
+/// `lift_distributive_exile_top_scope`; this catches a future edit that reintroduces a
+/// conditional path.
+///
+/// Roots are enumerated deliberately. Five of the seven cards in this class are TRIGGERS
+/// (Brainstealer Dragon, Nassari, Stolen Strategy, Mindleecher, Lobelia; Processing Plant's
+/// sits in a trigger's `else_ability`) and only Fire Lord Ozai's is an activated ability, so a
+/// guard wired to `abilities` alone would be vacuous exactly where the class lives.
+/// `visit_ability_def` supplies the recursion through `sub_ability` / `else_ability` /
+/// `mode_abilities`. `StaticDefinition` holds no `AbilityDefinition` and so has no root here.
+#[cfg(debug_assertions)]
+pub(super) fn debug_assert_exile_top_opponent_sentinel_lifted(
+    parsed: &crate::parser::oracle::ParsedAbilities,
+    card_name: &str,
+) {
+    let assert_lifted = |def: &AbilityDefinition, root: &str| {
+        let _ = crate::types::ability_visit::visit_ability_def(def, &mut |effect: &Effect| {
+            assert!(
+                !matches!(
+                    effect,
+                    Effect::ExileTop {
+                        player: TargetFilter::Opponent,
+                        ..
+                    }
+                ),
+                "unlifted ExileTop opponent-scope sentinel on {card_name} ({root}): \
+                 `TargetFilter::Opponent` must be erased by lift_distributive_exile_top_scope, \
+                 otherwise exile_top resolves it to a single opponent instead of each opponent"
+            );
+            std::ops::ControlFlow::Continue(())
+        });
+    };
+    for def in &parsed.abilities {
+        assert_lifted(def, "activated/spell ability");
+    }
+    for trigger in &parsed.triggers {
+        if let Some(execute) = &trigger.execute {
+            assert_lifted(execute, "trigger execute");
+        }
+    }
+    for replacement in &parsed.replacements {
+        if let Some(execute) = &replacement.execute {
+            assert_lifted(execute, "replacement execute");
         }
     }
 }
@@ -31479,6 +31696,21 @@ pub(crate) fn parse_ability_ir(
         ChainLoweringMode::WithContext => parse_conditional_protection_grant_ir(text, kind, ctx),
     };
     if let Some(body) = conditional_protection {
+        return AbilityIr {
+            source_text: text.to_string(),
+            body,
+            shell: AbilityShellIr::default(),
+            die_results: vec![],
+            root_transforms: vec![],
+            modal: None,
+        };
+    }
+    // CR 400.11 + CR 400.11b: "Open a sealed Magic booster pack, reveal the
+    // cards, and put one of them into your hand." One effect, not a chain — the
+    // commas would otherwise split it into a head the parser cannot model and
+    // two orphaned steps. Recognized in BOTH lowering modes: the sentence is a
+    // whole printed spell ability, so it must win wherever a card body enters.
+    if let Some(body) = parse_open_booster_pack_ir(text, kind, ctx) {
         return AbilityIr {
             source_text: text.to_string(),
             body,
@@ -35317,11 +35549,12 @@ pub(crate) fn parse_effect_chain_ir(
             bind_search_library_for_each_antecedent(&mut clause.effect, target, &text_no_qty_lower);
         }
         // CR 608.2: `parse_exile_ast` uses `ScopedPlayer` as the structural
-        // marker for "each player's library". Lower it into the same
-        // player_scope-driven shape used by Evelyn/Jeleva-class effects:
-        // the resolver iterates all players and `Controller` reads the
-        // rebound per-player controller.
-        lift_each_player_exile_top_scope(&mut clause.effect, &mut player_scope);
+        // marker for "each player's library" and `Opponent` for "each
+        // opponent's library". Lower either into the same player_scope-driven
+        // shape used by Evelyn/Jeleva-class effects: the resolver iterates the
+        // players in scope and `Controller` reads the rebound per-player
+        // controller.
+        lift_distributive_exile_top_scope(&mut clause.effect, &mut player_scope);
         // CR 608.2c + CR 109.4: Fold a pending player-scope lifted from a
         // fieldless subject-predicate (`Effect::Investigate` — "That player
         // investigates", Declaration in Stone) into this chunk's `player_scope`.
@@ -36535,7 +36768,7 @@ fn try_parse_put_zone_change(lower: &str, text: &str) -> Option<Effect> {
         .map(|(effect, _, _)| effect)
 }
 
-/// The third tuple element is the CR 110.2a (docs/MagicCompRules.txt:618)
+/// The third tuple element is the CR 110.2a
 /// battlefield-entry control spec. It is returned ALONGSIDE the `Effect` rather
 /// than folded into `Effect::ChangeZone.enters_under` because the `Effect` field
 /// is a collapsed `Option<ControllerRef>` with no room for the fail-closed
@@ -36750,14 +36983,14 @@ fn try_parse_put_zone_change_parts(
                 let origin_text = format!("{}{}", before.lower, after.lower);
                 infer_origin_zone(&origin_text)
             };
-            // CR 110.2a (docs/MagicCompRules.txt:618): the SAME span as the
+            // CR 110.2a: the SAME span as the
             // single-literal `scan_contains_phrase(after_put_tp.lower, "under
             // your control")` boolean this replaces — no reach change. The
             // fold's `You`-wins priority makes it byte-for-byte non-regressive
             // (both walk word boundaries over the identical span and both
             // return `You` when that clause is present anywhere in it); the only
-            // delta is that a third-person anaphor is now bound (CR 608.2c @
-            // :2793) or failed closed instead of silently dropped.
+            // delta is that a third-person anaphor is now bound (CR 608.2c)
+            // or failed closed instead of silently dropped.
             let enters_under_spec = bind_control_clause(
                 fold_control_clauses(after_put_tp.lower),
                 name_entry_control_antecedent(Some(&target), ctx),

@@ -2513,6 +2513,17 @@ fn effect_details(effect: &Effect) -> Vec<(String, String)> {
             d.push(("count".into(), fmt_quantity(count)));
             d.push(("destination".into(), format!("{destination:?}")));
         }
+        Effect::OpenBoosterPack {
+            filter,
+            count,
+            destination,
+            reveal,
+        } => {
+            d.push(("filter".into(), fmt_target(filter)));
+            d.push(("count".into(), fmt_quantity(count)));
+            d.push(("destination".into(), format!("{destination:?}")));
+            d.push(("reveal".into(), reveal.to_string()));
+        }
         Effect::Draw { count, target } => {
             if !matches!(count, QuantityExpr::Fixed { value: 1 }) {
                 d.push(("count".into(), fmt_quantity(count)));
@@ -6928,6 +6939,8 @@ fn visit_direct_effect_ability_payloads<'a>(
         | Effect::FlipPermanent { .. }
         | Effect::SearchLibrary { .. }
         | Effect::SearchOutsideGame { .. }
+        // CR 400.11b: carries no nested ability definition.
+        | Effect::OpenBoosterPack { .. }
         | Effect::RevealHand { .. }
         | Effect::RevealFromHand {
             on_decline: None, ..

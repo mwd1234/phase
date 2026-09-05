@@ -228,6 +228,20 @@ fn parse_dig_library_owner(rest_lower: &str) -> TargetFilter {
         return TargetFilter::ScopedPlayer;
     }
 
+    // CR 401.1 + CR 102.2 + CR 102.3: "look at the top card of each opponent's library …
+    // and exile those cards" — the opponent-scoped partner of the `each player's` arm
+    // above. Mark the per-opponent scope with `Opponent` so the look-then-exile idiom's
+    // materialized `ExileTop` lifts to a `player_scope: Opponent` fan-out (the same shape
+    // the direct path gets via `parse_library_player_suffix`). Without this arm the
+    // recognizer falls through to `Controller` below and Lobelia, Defender of Bag End
+    // SILENTLY exiles the CONTROLLER's own top card instead of each opponent's.
+    if tag::<_, _, OracleError<'_>>("card of each opponent's library")
+        .parse(rest_lower)
+        .is_ok()
+    {
+        return TargetFilter::Opponent;
+    }
+
     TargetFilter::Controller
 }
 
@@ -2078,7 +2092,7 @@ pub(super) fn parse_targeted_action_ast(
                 // from your graveyard to the battlefield. They enter with a
                 // finality counter" (Shilgengar) applies the finality counter
                 // (CR 122.1h) to every returned object, not just one.
-                // CR 110.2a (docs/MagicCompRules.txt:618) + CR 608.2c (:2793):
+                // CR 110.2a + CR 608.2c:
                 // bind the raw control clause BEFORE either struct literal —
                 // the `target,` field shorthand MOVES `target`, so a `&target`
                 // borrow inside the literal would not compile. `d.control` is
@@ -2173,7 +2187,7 @@ pub(super) fn parse_targeted_action_ast(
                         )?,
                         origin,
                         destination: Zone::Hand,
-                        // CR 110.2 (docs/MagicCompRules.txt:616): controller
+                        // CR 110.2: controller
                         // semantics apply only while an object is a permanent.
                         enters_under: EntersUnderSpec::Default,
                         enter_tapped: false,
@@ -2214,7 +2228,7 @@ pub(super) fn parse_targeted_action_ast(
                         )?,
                         origin,
                         destination: d.zone,
-                        // CR 110.2 (docs/MagicCompRules.txt:616): controller
+                        // CR 110.2: controller
                         // semantics apply only while an object is a permanent.
                         enters_under: EntersUnderSpec::Default,
                         enter_tapped: false,
@@ -2463,7 +2477,7 @@ pub(super) fn lower_targeted_action_ast(ast: TargetedImperativeAst) -> Effect {
             face_down,
             attach_host: _,
         } => {
-            // CR 110.2a (docs/MagicCompRules.txt:618): fail closed. A printed
+            // CR 110.2a: fail closed. A printed
             // control clause whose antecedent could not be named must NOT
             // collapse into the existing no-override carrier — that loses the
             // explicitly printed controller while the card reports as fully
@@ -2530,7 +2544,7 @@ pub(super) fn lower_targeted_action_ast(ast: TargetedImperativeAst) -> Effect {
             enter_tapped,
             enter_with_counters,
         } => {
-            // CR 110.2a (docs/MagicCompRules.txt:618): fail closed on an
+            // CR 110.2a: fail closed on an
             // unbindable control clause rather than silently defaulting the
             // controller for the whole moved population.
             if let Some(p) = enters_under.unbound_possessor() {
@@ -7049,7 +7063,7 @@ fn try_parse_gain_keyword(text: &str) -> Option<Effect> {
         return None;
     }
 
-    // CR 611.2a (`docs/MagicCompRules.txt:2908`): do NOT inject a default window
+    // CR 611.2a: do NOT inject a default window
     // here. `None` must stay a true unset sentinel so a window this clause's own
     // recognizer already hoisted onto the carrier can distribute into the embedded
     // field (`oracle_ir::ast::duration_is_unset_sentinel`). An injected
@@ -7370,7 +7384,7 @@ pub(super) fn parse_put_ast(
     if let Some((effect, choice_count, enters_under)) =
         super::try_parse_put_zone_change_parts(lower, text, ctx)
     {
-        // CR 110.2a (docs/MagicCompRules.txt:618): the control clause is bound
+        // CR 110.2a: the control clause is bound
         // by the seam that owns the destination text and returned alongside the
         // `Effect`, so the AST carries the full three-state spec (including the
         // fail-closed `UnboundAnaphor`) rather than the `Effect`'s already
@@ -7525,7 +7539,7 @@ pub(super) fn lower_put_ast(ast: PutImperativeAst) -> Effect {
             // bare (non-partition) lowering never carries it.
             rest_library_position: _,
         } => {
-            // CR 110.2a (docs/MagicCompRules.txt:618): fail closed. This
+            // CR 110.2a: fail closed. This
             // lowering receives NO text, which is exactly why
             // `EntersUnderSpec::UnboundAnaphor` carries the possessor — the
             // printed clause is recoverable here without a text slice.
@@ -7560,7 +7574,7 @@ pub(super) fn lower_put_ast(ast: PutImperativeAst) -> Effect {
             choice_count: _,
             enter_with_counters,
         } => {
-            // CR 110.2a (docs/MagicCompRules.txt:618): fail closed. This
+            // CR 110.2a: fail closed. This
             // lowering receives NO text, which is exactly why
             // `EntersUnderSpec::UnboundAnaphor` carries the possessor — the
             // printed clause is recoverable here without a text slice.
@@ -8754,6 +8768,7 @@ fn starts_with_target_possessive_zone(rest_lower: &str) -> bool {
 /// - "target opponent's library" → `Typed{controller: Opponent}`
 /// - "target player's library" → `Player`
 /// - "each player's library" → `ScopedPlayer`
+/// - "each opponent's library" → `Opponent` (parse-only scope sentinel)
 ///
 /// The helper performs only the player-suffix match; callers own any trailing
 /// face-down / where-X / destination parsing (the exile and manifest epilogues
@@ -8784,6 +8799,18 @@ pub(super) fn parse_library_player_suffix<'a>(
         ("cards of target player's library", TargetFilter::Player),
         ("card of each player's library", TargetFilter::ScopedPlayer),
         ("cards of each player's library", TargetFilter::ScopedPlayer),
+        // CR 401.1 + CR 102.2 + CR 102.3 + CR 608.2c: "each opponent's library" names ONE
+        // library per opponent — the same one-library-per-player reading as the `each
+        // player's` rows above, restricted to the controller's opponents. `TargetFilter::
+        // Opponent` is the parse-only scope sentinel here (never a targeted single
+        // opponent); `lift_distributive_exile_top_scope` erases it to `Controller` and
+        // stamps `player_scope: Opponent`, so the fan-out rebinds the acting controller to
+        // each opponent in APNAP order and `Effect::ExileTop` reads that opponent's library.
+        // Without these rows the clause falls through to the generic
+        // ChangeZone(Library→Exile) path, which offers a library-wide EffectZoneChoice
+        // tutor prompt over every card in every opponent's library (issue #8392).
+        ("card of each opponent's library", TargetFilter::Opponent),
+        ("cards of each opponent's library", TargetFilter::Opponent),
     ] {
         if let Ok((tail, _)) = tag::<_, _, OracleError<'_>>(pattern).parse(remainder) {
             return Some((tail, player));
@@ -12855,7 +12882,7 @@ pub(super) fn lower_imperative_family_ast(ast: ImperativeFamilyAst) -> ParsedEff
             rest_destination: Some(rest_destination),
             rest_library_position,
         }) => {
-            // CR 110.2a (docs/MagicCompRules.txt:618): fail closed before the
+            // CR 110.2a: fail closed before the
             // partition is materialized — a wrong controller on the primary
             // pile would otherwise ship silently.
             if let Some(p) = enters_under.unbound_possessor() {
@@ -13439,7 +13466,7 @@ pub(super) fn lower_imperative_family_ast(ast: ImperativeFamilyAst) -> ParsedEff
                 attach_host: Some(host),
             },
         )) => {
-            // CR 110.2a (docs/MagicCompRules.txt:618): fail closed before the
+            // CR 110.2a: fail closed before the
             // attachment is installed. An unbound control clause lowers to an
             // honest gap; leaving an executable Attach beneath it would attach
             // a permanent that never entered the battlefield.

@@ -164,6 +164,7 @@ pub mod mill;
 pub mod monstrosity;
 pub mod myriad;
 pub mod note_mana_spent;
+pub mod open_booster_pack;
 pub mod opponent_guess;
 pub mod overload;
 pub mod pair_with;
@@ -5372,6 +5373,7 @@ pub fn resolve_effect(
         Effect::FlipPermanent { .. } => flip_permanent::resolve(state, ability, events),
         Effect::SearchLibrary { .. } => search_library::resolve(state, ability, events),
         Effect::SearchOutsideGame { .. } => search_outside_game::resolve(state, ability, events),
+        Effect::OpenBoosterPack { .. } => open_booster_pack::resolve(state, ability, events),
         Effect::Seek { .. } => seek::resolve(state, ability, events),
         Effect::RevealHand { .. } => reveal_hand::resolve(state, ability, events),
         Effect::RevealFromHand { .. } => reveal_from_hand::resolve(state, ability, events),

@@ -1231,6 +1231,20 @@ fn scan_effect(x: &Effect, mode: ScanMode) -> Axes {
             acc = acc.or(scan_quantity_expr(count, mode));
             acc
         }
+        // CR 400.11b: identical scan shape to `SearchOutsideGame` — the only
+        // reads are the effect's own candidate filter and its take count. The
+        // pack's contents come from the shelf, not from board state.
+        Effect::OpenBoosterPack {
+            filter,
+            count,
+            destination: _,
+            reveal: _,
+        } => {
+            let mut acc = Axes::NONE;
+            acc = acc.or(scan_target_filter(filter, target_ctx, mode));
+            acc = acc.or(scan_quantity_expr(count, mode));
+            acc
+        }
         Effect::RevealHand {
             target,
             card_filter,
@@ -6129,6 +6143,8 @@ fn effect_target_ctx(e: &Effect, mode: ScanMode) -> FilterReadContext {
         | Effect::FlipPermanent { .. }
         | Effect::SearchLibrary { .. }
         | Effect::SearchOutsideGame { .. }
+        // CR 400.11: the filter reads the OPENED PACK's cards, never the board.
+        | Effect::OpenBoosterPack { .. }
         | Effect::RevealHand { .. }
         | Effect::RevealFromHand { .. }
         | Effect::Reveal { .. }
@@ -6414,6 +6430,8 @@ fn effect_census_role(e: &Effect) -> CensusRole {
         | Effect::Seek { .. }
         | Effect::SearchLibrary { .. }
         | Effect::SearchOutsideGame { .. }
+        // CR 400.11: reads a pack from OUTSIDE the game — no board population at all.
+        | Effect::OpenBoosterPack { .. }
         | Effect::RevealHand { .. }
         | Effect::RevealFromHand { .. }
         | Effect::Reveal { .. }
@@ -6650,6 +6668,12 @@ pub(crate) fn effect_is_randomness_bearing(e: &Effect) -> bool {
         | Effect::ChaosEnsues
         | Effect::RollToVisitAttractions
         | Effect::AssembleContraptionsFromRollDifference
+        // CR 400.11 + CR 701.9b: opening a booster pack draws the seeded RNG
+        // twice — the shelf product and the pack's collation — and the cards it
+        // produces determine what the controller may then take. Unpredictable at
+        // pin time, so a loop body containing one is not a legal CR 732.2a
+        // shortcut.
+        | Effect::OpenBoosterPack { .. }
         // CR 701.30a: a clash reveals the top card of each player's (shuffled) library — hidden
         // information the recast injector cannot know at pin time. CR 701.30d: the winner is
         // decided by comparing those revealed mana values, so the outcome (and any action it

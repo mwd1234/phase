@@ -6538,6 +6538,13 @@ pub enum TargetFilter {
     /// *player-reference* role only — it is never used as an object-population
     /// filter (an opponent-controlled object is expressed as
     /// `Typed(.., controller: Some(ControllerRef::Opponent))`).
+    ///
+    /// SECOND ROLE (parse-only, CR 401.1): in the top-of-library exile owner tables
+    /// (`parse_library_player_suffix` / `parse_dig_library_owner`) this variant is the
+    /// scope sentinel for the possessive "each opponent's library", exactly mirroring
+    /// `ScopedPlayer`'s sentinel role for "each player's library". It never survives into
+    /// a finished `AbilityDefinition`: `lift_distributive_exile_top_scope` rewrites it to
+    /// `Controller` and stamps `AbilityDefinition.player_scope = Some(PlayerFilter::Opponent)`.
     Opponent,
     SelfRef,
     /// CR 201.5a: The specific object that GRANTED the ability this filter lives
@@ -15480,6 +15487,44 @@ pub enum Effect {
         #[serde(default, skip_serializing_if = "is_default_outside_game_source_pool")]
         source_pool: OutsideGameSourcePool,
     },
+    /// CR 400.11 + CR 400.11b + CR 701.20: Open a sealed Magic booster pack —
+    /// a set of cards from OUTSIDE the game — reveal them, and bring `count` of
+    /// the revealed cards matching `filter` into the game at `destination`
+    /// (CR 400.11b: "Some effects bring cards into a game from outside the
+    /// game"). Cards that are not taken were never in any zone (CR 400.11:
+    /// "Outside the game is not a zone"), so they are not exiled or put into a
+    /// graveyard — they simply remain outside the game.
+    ///
+    /// Booster packs have no Comprehensive Rules entry: opening one is a
+    /// physical action the printed cards (Booster Tutor, Summon the Pack,
+    /// A Container of Booster Packs, The Chaos Keeper) instruct the player to
+    /// perform, and the reminder text ("Remove that card from your deck before
+    /// beginning a new game") governs the between-games bookkeeping the engine
+    /// does not model. The digital engine substitutes a pack generated from
+    /// `GameState::booster_shelf` (see `game::boosters`).
+    ///
+    /// Parameterized rather than card-shaped: `filter` + `count` + `destination`
+    /// separate "which of the opened cards may be taken", "how many", and "where
+    /// they go", which is the axis the printed cards actually differ on —
+    /// Booster Tutor takes one card of any kind into its controller's hand,
+    /// Summon the Pack takes every creature card onto the battlefield.
+    OpenBoosterPack {
+        /// CR 400.11: which of the opened cards may be taken.
+        #[serde(default = "default_target_filter_any")]
+        filter: TargetFilter,
+        /// How many of the opened cards are taken. `QuantityExpr::UpTo` peels
+        /// into the choice's "up to" flag exactly as it does for
+        /// `SearchOutsideGame`.
+        #[serde(default = "default_quantity_one")]
+        count: QuantityExpr,
+        /// CR 400.11b: the zone the taken cards enter.
+        #[serde(default = "default_zone_hand")]
+        destination: Zone,
+        /// CR 701.20: "reveal the cards" — the whole pack is public, not just
+        /// the card that is taken.
+        #[serde(default)]
+        reveal: bool,
+    },
     RevealHand {
         #[serde(default = "default_target_filter_any")]
         target: TargetFilter,
@@ -19190,6 +19235,9 @@ impl Effect {
             | Effect::Vote { .. }
             | Effect::Cleanup { .. }
             | Effect::SearchOutsideGame { .. }
+            // CR 400.11 + CR 608.2d: the pack's cards are chosen as the effect
+            // resolves, not declared as stack targets.
+            | Effect::OpenBoosterPack { .. }
             | Effect::Choose { .. }
             | Effect::OpponentGuess { .. }
             | Effect::ChooseDamageSource { .. }
@@ -19705,6 +19753,11 @@ impl Effect {
             // `Zone::Library` destination WOULD be a move *to* a library; every
             // one of the 11 shipping nodes is `Hand` today.
             Effect::SearchOutsideGame { destination, .. } => *destination == Zone::Library,
+            // CR 400.11: a booster pack's cards are OUTSIDE the game, which is
+            // not a zone — so the origin half never touches a library. The
+            // destination is still read, because a `Zone::Library` destination
+            // would be a move *to* a library.
+            Effect::OpenBoosterPack { destination, .. } => *destination == Zone::Library,
 
             // CR 901.4: "All plane and phenomenon cards remain in the COMMAND ZONE
             // throughout the game, both while they're part of a planar deck and
@@ -20279,6 +20332,9 @@ impl Effect {
             Effect::SearchOutsideGame { count, .. } => {
                 f(count);
             }
+            Effect::OpenBoosterPack { count, .. } => {
+                f(count);
+            }
             Effect::RevealHand { count, .. } => {
                 if let Some(q) = count {
                     f(q);
@@ -20702,6 +20758,7 @@ impl Effect {
             | Effect::Discard { count, .. }
             | Effect::SearchLibrary { count, .. }
             | Effect::SearchOutsideGame { count, .. }
+            | Effect::OpenBoosterPack { count, .. }
             | Effect::ExileTop { count, .. }
             | Effect::ExileFaceDownPile { count, .. }
             | Effect::AddPendingETBCounters { count, .. }
@@ -20965,6 +21022,7 @@ impl Effect {
             | Effect::Discard { count, .. }
             | Effect::SearchLibrary { count, .. }
             | Effect::SearchOutsideGame { count, .. }
+            | Effect::OpenBoosterPack { count, .. }
             | Effect::ExileTop { count, .. }
             | Effect::ExileFaceDownPile { count, .. }
             | Effect::AddPendingETBCounters { count, .. }
@@ -21310,6 +21368,7 @@ pub fn effect_variant_name(effect: &Effect) -> &str {
         Effect::FlipPermanent { .. } => "FlipPermanent",
         Effect::SearchLibrary { .. } => "SearchLibrary",
         Effect::SearchOutsideGame { .. } => "SearchOutsideGame",
+        Effect::OpenBoosterPack { .. } => "OpenBoosterPack",
         Effect::RevealHand { .. } => "RevealHand",
         Effect::RevealFromHand { .. } => "RevealFromHand",
         Effect::Reveal { .. } => "Reveal",
@@ -21563,6 +21622,7 @@ pub enum EffectKind {
     Shuffle,
     SearchLibrary,
     SearchOutsideGame,
+    OpenBoosterPack,
     ExileTop,
     TargetOnly,
     Choose,
@@ -21825,6 +21885,7 @@ impl From<&Effect> for EffectKind {
             Effect::FlipPermanent { .. } => EffectKind::FlipPermanent,
             Effect::SearchLibrary { .. } => EffectKind::SearchLibrary,
             Effect::SearchOutsideGame { .. } => EffectKind::SearchOutsideGame,
+            Effect::OpenBoosterPack { .. } => EffectKind::OpenBoosterPack,
             Effect::RevealHand { .. } => EffectKind::Reveal,
             Effect::RevealFromHand { .. } => EffectKind::Reveal,
             Effect::Reveal { .. } => EffectKind::Reveal,

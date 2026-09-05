@@ -1867,7 +1867,9 @@ fn outside_selection_projection(
         } else {
             total.checked_add(match &choice.source {
                 OutsideGameChoiceSource::Sideboard { .. } => choice.count as usize,
-                OutsideGameChoiceSource::FaceUpExile { .. } => 1,
+                // CR 400.11b + CR 406.3: a single physical card each.
+                OutsideGameChoiceSource::FaceUpExile { .. }
+                | OutsideGameChoiceSource::BoosterPack { .. } => 1,
             })
         }
     });
@@ -1890,10 +1892,16 @@ fn outside_selection_projection(
                         object_id: *object_id,
                     }
                 }
+                OutsideGameChoiceSource::BoosterPack { pack_slot, .. } => {
+                    OutsideGameSelection::BoosterPack {
+                        pack_slot: *pack_slot,
+                    }
+                }
             };
             let copies = match &choice.source {
                 OutsideGameChoiceSource::Sideboard { .. } => choice.count as usize,
-                OutsideGameChoiceSource::FaceUpExile { .. } => 1,
+                OutsideGameChoiceSource::FaceUpExile { .. }
+                | OutsideGameChoiceSource::BoosterPack { .. } => 1,
             };
             (0..copies).map(move |_| OutsideSelectionCandidate {
                 selection: selection.clone(),
@@ -5505,6 +5513,11 @@ fn project_action_payload(
                         *object_id,
                         InteractionRoleCode::FaceUpExile,
                     ),
+                    // CR 400.11b: the pack's card is not an in-game object, so
+                    // its slot in the opened pack is the surfaced identity.
+                    OutsideGameSelection::BoosterPack { pack_slot } => {
+                        push_value_surface(surfaces, InteractionRoleCode::CandidateIndex, pack_slot)
+                    }
                 }
             }
         }
@@ -7031,6 +7044,20 @@ fn outside_selection_choices(
                         filtered_state,
                         object_id,
                         InteractionRoleCode::FaceUpExile,
+                    );
+                }
+                // CR 400.11b: a pack card has no `ObjectId` until it is taken,
+                // so the pack slot plus the printed name identify the candidate.
+                OutsideGameSelection::BoosterPack { pack_slot } => {
+                    push_value_surface(
+                        &mut surfaces,
+                        InteractionRoleCode::CandidateIndex,
+                        pack_slot,
+                    );
+                    push_value_surface(
+                        &mut surfaces,
+                        InteractionRoleCode::CardName,
+                        &candidate.name,
                     );
                 }
             }

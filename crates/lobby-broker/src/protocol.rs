@@ -38,12 +38,19 @@ pub enum ServerErrorCode {
 /// rather than a parse error, and the handshake is the only place that pairing
 /// can be refused. See 24.
 ///
-/// 63 — `DraftMatchStart` now announces the exact Full-session identity for
+/// 64 — `DraftMatchStart` now announces the exact Full-session identity for
 ///      the spawned match. Draft reconnect uses the authenticated draft seat
 ///      to attach that socket to the same Full-session lifetime, and Full
 ///      follow-up frames carry the identity needed to reject stale-generation
 ///      traffic. Lobby messages are unchanged.
-///
+/// 63 — `WaitingFor::ReplacementChoice` gained an engine-owned
+///      `ReplacementChoiceKind` discriminator and a `last_applied_decides`
+///      flag. Both are `#[serde(default)]`, so a v62 peer decodes the payload
+///      successfully and then falls back to the `Order` default: it renders a
+///      drag-to-order list for a yes/no "you may" prompt, and names a winning
+///      outcome for a compositional collision that has none. A silent
+///      misrender rather than a decode failure, so the exact-match full-game
+///      handshake must refuse the pairing. Lobby messages are unchanged.
 /// 62 — `ServerMessage::{GameStarted, StateUpdate}` gained
 ///      `activation_block_reasons: HashMap<ObjectId, Vec<AbilityBlockEntry>>` —
 ///      the CR 118.3 "you can't pay this cost right now" read-out, scoped to the
@@ -336,7 +343,7 @@ pub enum ServerErrorCode {
 ///      payload; mulligan bottoming folded into a
 ///      `MulliganDecisionPhase::BottomCards` sub-phase on
 ///      `WaitingFor::MulliganDecision`.
-pub const PROTOCOL_VERSION: u32 = 63;
+pub const PROTOCOL_VERSION: u32 = 64;
 
 /// Minimum protocol version accepted by lobby-only brokers at the hello
 /// handshake **from clients that predate [`LOBBY_PROTOCOL_VERSION`]** — the
@@ -1082,12 +1089,12 @@ mod tests {
 
     #[test]
     fn protocol_version_tracks_full_game_wire_additions() {
-        assert_eq!(PROTOCOL_VERSION, 63);
+        assert_eq!(PROTOCOL_VERSION, 64);
         // Lobby keeps its one-version rollout window; full-game servers stay
         // current-only (`server_core::MIN_SUPPORTED_PROTOCOL == PROTOCOL_VERSION`),
         // which refuses an older full-game peer that cannot preserve the exact
         // Full-session identity across draft match attachment and follow-ups.
-        assert_eq!(MIN_SUPPORTED_PROTOCOL, 62);
+        assert_eq!(MIN_SUPPORTED_PROTOCOL, 63);
     }
 
     #[test]
